@@ -1,0 +1,258 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "freertos/queue.h"
+#include "esp_event.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_netif_sntp.h"
+#include "esp_timer.h"
+#include "esp_random.h"
+#include "esp_system.h"
+#include "esp_ota_ops.h"
+#include "mqtt_client.h"
+#include "nvs_flash.h"
+#include "cJSON.h"
+#include "mbedtls/base64.h"
+#include "psa/crypto.h"
+#include "davis_uart.h"
+#include "davis_rfm69.h"
+#include "provisioning.h"
+
+#if !CONFIG_MQTT_PROTOCOL_5
+#error "MQTT protocol 5 must be enabled in sdkconfig"
+#endif
+
+#define COMMAND_SIZE 4096
+#define CONFIG_SIZE 1024
+static const char *TAG = "weathergateway";
+extern const char ca_pem[] asm("_binary_ca_pem_start");
+extern const char device_pem[] asm("_binary_device_pem_start");
+extern const char device_key[] asm("_binary_device_key_start");
+typedef struct {
+  uint32_t version;
+  char active[CONFIG_SIZE], active_hash[65];
+  char previous[CONFIG_SIZE], previous_hash[65];
+  char candidate[CONFIG_SIZE], candidate_hash[65], test_id[37];
+  char last_command[37], last_status[20];
+  uint64_t command_sequence;
+  int64_t deadline, last_epoch;
+  uint8_t pending;
+} persistent_t;
+typedef struct { char host[254]; int port, seconds, rx, tx, baud; bool radio; davis_radio_config_t rf; } config_t;
+typedef struct { char json[COMMAND_SIZE]; } command_t;
+static persistent_t state;
+static config_t current;
+static nvs_handle_t nvs;
+static esp_mqtt_client_handle_t mqtt;
+static QueueHandle_t commands;
+static EventGroupHandle_t network_events;
+static volatile bool connected, new_connection, telemetry_acked;
+static volatile int telemetry_message_id = -1;
+static char command_topic[160], telemetry_topic[160], ack_topic[160], status_topic[160], mqtt_uri[300], boot_id[37];
+static uint32_t observation_sequence;
+static int64_t lease_monotonic, last_publish;
+static esp_timer_handle_t wifi_retry_timer;
+static unsigned wifi_failures;
+
+static const char *text(cJSON *object, const char *key) { cJSON *v = cJSON_GetObjectItemCaseSensitive(object, key); return cJSON_IsString(v) ? v->valuestring : NULL; }
+static bool copy_text(char *target, size_t capacity, const char *source) { if (!source || strlen(source) >= capacity) return false; memcpy(target, source, strlen(source) + 1); return true; }
+static bool uuid(const char *v) { if (!v || strlen(v) != 36) return false; for (int i = 0; i < 36; i++) { if (i == 8 || i == 13 || i == 18 || i == 23) { if (v[i] != '-') return false; } else if (!((v[i] >= '0' && v[i] <= '9') || (v[i] >= 'a' && v[i] <= 'f'))) return false; } return true; }
+static bool integer(cJSON *object, const char *key, int low, int high, int *out) { cJSON *v = cJSON_GetObjectItemCaseSensitive(object, key); if (!cJSON_IsNumber(v) || !isfinite(v->valuedouble) || v->valuedouble != floor(v->valuedouble) || v->valuedouble < low || v->valuedouble > high) return false; *out = (int)v->valuedouble; return true; }
+static bool pin(int value) { const int valid[] = {16,17,18,19,21,22,23,25,26,27,32,33}; for (int i = 0; i < sizeof(valid)/sizeof(valid[0]); i++) if (value == valid[i]) return true; return false; }
+static bool radio_pin(int value) { return value == 13 || value == 14 || pin(value); }
+static bool digest_matches(const char *json, const char *expected) {
+  unsigned char hash[32]; char hex[65]; size_t length = 0;
+  if (!expected || strlen(expected) != 64 || psa_hash_compute(PSA_ALG_SHA_256, (const unsigned char *)json, strlen(json), hash, sizeof(hash), &length) != PSA_SUCCESS || length != sizeof(hash)) return false;
+  for (int i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", hash[i]);
+  return strcmp(hex, expected) == 0;
+}
+static bool parse_config(const char *json, config_t *out) {
+  memset(out, 0, sizeof(*out));
+  cJSON *o = cJSON_Parse(json); if (!cJSON_IsObject(o)) { cJSON_Delete(o); return false; }
+  const char *interface = text(o, "interface");
+  out->radio = interface && !strcmp(interface, "davis-iss-rfm69");
+  if (cJSON_GetArraySize(o) != (out->radio ? 13 : 7)) { cJSON_Delete(o); return false; }
+  const char *station = text(o, "stationId"), *host = text(o, "mqttHost"), *baud = text(o, "uartBaud");
+  bool valid = station && !strcmp(station, WG_STATION_ID) && copy_text(out->host, sizeof(out->host), host) &&
+    integer(o, "mqttPort", 1, 65535, &out->port) && integer(o, "sampleSeconds", 1, 300, &out->seconds);
+  if (valid && out->radio) {
+    const char *band = text(o, "radioBand");
+    valid = band && !strcmp(band, "EU868") && integer(o, "transmitterId", 1, 8, &out->rf.transmitter_id) &&
+      integer(o, "spiSck", 0, 33, &out->rf.sck) && integer(o, "spiMiso", 0, 33, &out->rf.miso) &&
+      integer(o, "spiMosi", 0, 33, &out->rf.mosi) && integer(o, "radioCs", 0, 33, &out->rf.cs) &&
+      integer(o, "radioReset", 0, 33, &out->rf.reset) && integer(o, "radioDio0", 0, 33, &out->rf.dio0);
+    int values[] = {out->rf.sck, out->rf.miso, out->rf.mosi, out->rf.cs, out->rf.reset, out->rf.dio0};
+    for (int i = 0; valid && i < 6; i++) {
+      if (!radio_pin(values[i])) valid = false;
+      for (int j = 0; j < i; j++) if (values[i] == values[j]) valid = false;
+    }
+  } else if (valid) {
+    valid = baud && integer(o, "uartRx", 0, 39, &out->rx) && integer(o, "uartTx", 0, 39, &out->tx);
+    if (valid) { out->baud = atoi(baud); valid = pin(out->rx) && pin(out->tx) && out->rx != out->tx && (!strcmp(baud,"19200") || !strcmp(baud,"9600") || !strcmp(baud,"2400") || !strcmp(baud,"1200")); }
+  }
+  if (valid) valid = host[0] && !strstr(host, "..");
+  if (valid) for (const char *p = host; *p; ++p) if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '.' || *p == '-')) valid = false;
+  cJSON_Delete(o); return valid;
+}
+static void persist(void) { ESP_ERROR_CHECK(nvs_set_blob(nvs, "state", &state, sizeof(state))); ESP_ERROR_CHECK(nvs_commit(nvs)); }
+static const char *configuration_json(void) { return state.pending ? state.candidate : state.active; }
+static const char *configuration_hash(void) { return state.pending ? state.candidate_hash : state.active_hash; }
+static void ack(const char *id, const char *status) {
+  if (!connected || !uuid(id)) return;
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o, "version", 1); cJSON_AddStringToObject(o, "stationId", WG_STATION_ID); cJSON_AddStringToObject(o, "commandId", id); cJSON_AddStringToObject(o, "status", status); cJSON_AddStringToObject(o, "configurationHash", configuration_hash());
+  char *json = cJSON_PrintUnformatted(o); if (json) { esp_mqtt_client_publish(mqtt, ack_topic, json, 0, 1, 0); free(json); } cJSON_Delete(o);
+}
+static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void *data) {
+  esp_mqtt_event_handle_t event = data;
+  static command_t incoming;
+  static bool accepting;
+  switch (event_id) {
+    case MQTT_EVENT_CONNECTED: connected = true; new_connection = true; esp_mqtt_client_subscribe(event->client, command_topic, 1); break;
+    case MQTT_EVENT_DISCONNECTED: connected = false; break;
+    case MQTT_EVENT_PUBLISHED: if (event->msg_id == telemetry_message_id) telemetry_acked = true; break;
+    case MQTT_EVENT_DATA:
+      if (event->current_data_offset == 0) accepting = event->topic_len == strlen(command_topic) && !memcmp(event->topic, command_topic, event->topic_len) && event->total_data_len > 0 && event->total_data_len < COMMAND_SIZE;
+      if (!accepting || event->current_data_offset < 0 || event->data_len < 0 || event->current_data_offset + event->data_len >= COMMAND_SIZE) break;
+      memcpy(incoming.json + event->current_data_offset, event->data, event->data_len);
+      if (event->current_data_offset + event->data_len == event->total_data_len) { incoming.json[event->total_data_len] = 0; xQueueSend(commands, &incoming, 0); accepting = false; }
+      break;
+    default: break;
+  }
+}
+static void reconnect(void) {
+  if (mqtt) { esp_mqtt_client_stop(mqtt); esp_mqtt_client_destroy(mqtt); mqtt = NULL; }
+  connected = false; new_connection = false;
+  if (!parse_config(configuration_json(), &current)) abort();
+  davis_stop(); davis_radio_stop();
+  if (current.radio) (void)davis_radio_init(&current.rf);
+  else davis_init(current.rx, current.tx, current.baud);
+  snprintf(mqtt_uri, sizeof(mqtt_uri), "mqtts://%s:%d", current.host, current.port);
+  esp_mqtt_client_config_t config = {
+    .broker.address.uri = mqtt_uri,
+    .broker.verification.certificate = ca_pem,
+    .credentials.authentication.certificate = device_pem,
+    .credentials.authentication.key = device_key,
+    .session.protocol_ver = MQTT_PROTOCOL_V_5,
+    .network.reconnect_timeout_ms = 2000,
+    .network.timeout_ms = 8000,
+    .buffer.size = 2048, .buffer.out_size = 2048,
+    .outbox.limit = 8192,
+    .session.last_will.topic = status_topic,
+    .session.last_will.msg = "{\"online\":false}",
+    .session.last_will.qos = 1,
+    .session.last_will.retain = 1,
+  };
+  mqtt = esp_mqtt_client_init(&config); if (!mqtt) abort();
+  ESP_ERROR_CHECK(esp_mqtt_client_register_event(mqtt, ESP_EVENT_ANY_ID, mqtt_event, NULL)); ESP_ERROR_CHECK(esp_mqtt_client_start(mqtt));
+}
+static int64_t expiry(const char *value) {
+  if (!value || strlen(value) != 24 || value[23] != 'Z') return 0;
+  struct tm parsed = {0}; int y, mo, d, h, mi, s;
+  if (sscanf(value, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &s) != 6) return 0;
+  parsed.tm_year = y - 1900; parsed.tm_mon = mo - 1; parsed.tm_mday = d; parsed.tm_hour = h; parsed.tm_min = mi; parsed.tm_sec = s;
+  return (int64_t)mktime(&parsed);
+}
+static void rollback(void) {
+  if (state.pending) { state.pending = 0; state.candidate[0] = 0; copy_text(state.last_status, sizeof(state.last_status), "rolled_back"); persist(); reconnect(); }
+}
+static void process_command(const char *json) {
+  cJSON *o = cJSON_Parse(json); if (!o) return;
+  const char *target = text(o, "stationId"), *id = text(o, "commandId"), *kind = text(o, "kind"), *digest = text(o, "configurationHash");
+  cJSON *sequence = cJSON_GetObjectItemCaseSensitive(o, "sequence"), *version = cJSON_GetObjectItemCaseSensitive(o, "version");
+  int64_t now = time(NULL), end = expiry(text(o, "expiresAt"));
+  if (!target || strcmp(target, WG_STATION_ID) || !uuid(id) || !kind || !cJSON_IsNumber(version) || version->valueint != 1 || !cJSON_IsNumber(sequence) || sequence->valuedouble < 1 || sequence->valuedouble > 9007199254740991.0 || floor(sequence->valuedouble) != sequence->valuedouble || now < WG_MINIMUM_EPOCH || now < state.last_epoch || end <= now || end - now > 3600) goto done;
+  uint64_t seq = (uint64_t)sequence->valuedouble;
+  if (seq <= state.command_sequence) { if (!strcmp(id, state.last_command)) ack(id, state.last_status); goto done; }
+  if (!strcmp(kind, "test_config")) {
+    if (state.pending || !digest || strlen(digest) != 64) { ack(id, "rejected"); goto done; }
+    cJSON *candidate = cJSON_GetObjectItemCaseSensitive(o, "configuration"); char *encoded = cJSON_PrintUnformatted(candidate); config_t proposed;
+    if (!encoded || strlen(encoded) >= CONFIG_SIZE || !parse_config(encoded, &proposed) || !digest_matches(encoded, digest)) { free(encoded); ack(id, "rejected"); goto done; }
+    copy_text(state.candidate, sizeof(state.candidate), encoded); free(encoded);
+    copy_text(state.candidate_hash, sizeof(state.candidate_hash), digest); copy_text(state.test_id, sizeof(state.test_id), id);
+    state.pending = 1; state.deadline = end; lease_monotonic = esp_timer_get_time() + (end - now) * 1000000LL;
+    copy_text(state.last_status, sizeof(state.last_status), "testing");
+  } else if (!strcmp(kind, "commit_config")) {
+    if (!state.pending || !digest || strcmp(digest, state.candidate_hash)) { ack(id, "rejected"); goto done; }
+    copy_text(state.previous, sizeof(state.previous), state.active); copy_text(state.previous_hash, sizeof(state.previous_hash), state.active_hash);
+    copy_text(state.active, sizeof(state.active), state.candidate); copy_text(state.active_hash, sizeof(state.active_hash), state.candidate_hash);
+    state.pending = 0; copy_text(state.last_status, sizeof(state.last_status), "applied");
+  } else if (!strcmp(kind, "rollback_config")) {
+    if (state.pending && digest && !strcmp(digest, state.candidate_hash)) state.pending = 0;
+    else if (digest && !strcmp(digest, state.active_hash) && state.previous[0]) { copy_text(state.active, sizeof(state.active), state.previous); copy_text(state.active_hash, sizeof(state.active_hash), state.previous_hash); }
+    else { ack(id, "rejected"); goto done; }
+    copy_text(state.last_status, sizeof(state.last_status), "rolled_back");
+  } else if (!strcmp(kind, "restart")) { copy_text(state.last_status, sizeof(state.last_status), "applied"); }
+  else { ack(id, "rejected"); goto done; }
+  state.command_sequence = seq; state.last_epoch = now; copy_text(state.last_command, sizeof(state.last_command), id); persist();
+  ack(id, state.last_status);
+  if (!strcmp(kind, "restart")) { cJSON_Delete(o); vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
+  else if (!strcmp(kind, "test_config") || !strcmp(kind, "rollback_config")) reconnect();
+done:
+  cJSON_Delete(o);
+}
+static void wifi_retry(void *arg) { (void)arg; esp_wifi_connect(); }
+static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
+  (void)arg; (void)data;
+  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) esp_wifi_connect();
+  else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) { xEventGroupClearBits(network_events, 1); if (wifi_failures < 5) wifi_failures++; esp_timer_start_once(wifi_retry_timer, (1LL << wifi_failures) * 1000000LL); }
+  else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) { wifi_failures = 0; xEventGroupSetBits(network_events, 1); }
+}
+static void publish(const uint8_t *packet, size_t packet_size, int channel, int rssi_dbm) {
+  if (!connected || time(NULL) < WG_MINIMUM_EPOCH) return;
+  time_t now = time(NULL); struct tm utc; gmtime_r(&now, &utc); char stamp[25]; strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &utc);
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o, "version", 1); cJSON_AddStringToObject(o, "stationId", WG_STATION_ID); cJSON_AddStringToObject(o, "bootId", boot_id); cJSON_AddNumberToObject(o, "sequence", observation_sequence++); cJSON_AddStringToObject(o, "observedAt", stamp); cJSON_AddStringToObject(o, "firmware", "wg-esp32-1.1.0"); cJSON_AddBoolToObject(o, "sensorContact", packet != NULL); cJSON_AddObjectToObject(o, "measurements"); cJSON_AddStringToObject(o, "configurationHash", configuration_hash());
+  if (packet) { unsigned char encoded[133]; size_t length; if (mbedtls_base64_encode(encoded, sizeof(encoded), &length, packet, packet_size) == 0) { encoded[length] = 0; cJSON *source = cJSON_AddObjectToObject(o, "source"); cJSON_AddStringToObject(source, "protocol", current.radio ? "davis-iss" : "davis-loop"); cJSON_AddStringToObject(source, "packet", (char *)encoded); if (current.radio) { cJSON_AddNumberToObject(source, "channel", channel); cJSON_AddNumberToObject(source, "rssiDbm", rssi_dbm); } } }
+  char *body = cJSON_PrintUnformatted(o); if (body) { telemetry_message_id = esp_mqtt_client_publish(mqtt, telemetry_topic, body, 0, 1, 0); free(body); } cJSON_Delete(o); last_publish = esp_timer_get_time();
+}
+void app_main(void) {
+  (void)TAG;
+  setenv("TZ", "UTC0", 1); tzset();
+  if (psa_crypto_init() != PSA_SUCCESS) abort();
+  ESP_ERROR_CHECK(nvs_flash_init()); ESP_ERROR_CHECK(nvs_open("gateway", NVS_READWRITE, &nvs));
+  size_t length = sizeof(state); esp_err_t loaded = nvs_get_blob(nvs, "state", &state, &length);
+  if (loaded == ESP_ERR_NVS_NOT_FOUND) { memset(&state, 0, sizeof(state)); state.version = 1; copy_text(state.active, sizeof(state.active), WG_DEFAULT_CONFIG); copy_text(state.active_hash, sizeof(state.active_hash), WG_DEFAULT_HASH); persist(); }
+  else if (loaded != ESP_OK || length != sizeof(state) || state.version != 1) abort();
+  // A power cycle never grants a new test lease. Restore the confirmed record.
+  if (state.pending) { state.pending = 0; copy_text(state.last_status, sizeof(state.last_status), "rolled_back"); persist(); }
+  commands = xQueueCreate(2, sizeof(command_t)); network_events = xEventGroupCreate(); if (!commands || !network_events) abort();
+  esp_timer_create_args_t retry_args = { .callback = wifi_retry, .name = "wifi-retry" }; ESP_ERROR_CHECK(esp_timer_create(&retry_args, &wifi_retry_timer));
+  ESP_ERROR_CHECK(esp_netif_init()); ESP_ERROR_CHECK(esp_event_loop_create_default()); esp_netif_create_default_wifi_sta();
+  wifi_init_config_t wifi = WIFI_INIT_CONFIG_DEFAULT(); ESP_ERROR_CHECK(esp_wifi_init(&wifi));
+  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL)); ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
+  wifi_config_t credentials = {0};
+  if (strlen(WG_WIFI_SSID) > sizeof(credentials.sta.ssid) || strlen(WG_WIFI_PASSWORD) >= sizeof(credentials.sta.password)) abort();
+  memcpy(credentials.sta.ssid, WG_WIFI_SSID, strlen(WG_WIFI_SSID));
+  memcpy(credentials.sta.password, WG_WIFI_PASSWORD, strlen(WG_WIFI_PASSWORD));
+  credentials.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &credentials)); ESP_ERROR_CHECK(esp_wifi_start());
+  xEventGroupWaitBits(network_events, 1, pdFALSE, pdTRUE, portMAX_DELAY);
+  esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org"); ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
+  while (time(NULL) < WG_MINIMUM_EPOCH || time(NULL) < state.last_epoch) esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000));
+  uint8_t random[16]; esp_fill_random(random, sizeof(random)); random[6] = (random[6] & 15) | 64; random[8] = (random[8] & 63) | 128;
+  snprintf(boot_id, sizeof(boot_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", random[0],random[1],random[2],random[3],random[4],random[5],random[6],random[7],random[8],random[9],random[10],random[11],random[12],random[13],random[14],random[15]);
+  snprintf(command_topic, sizeof(command_topic), "wg/v1/%s/stations/%s/commands", WG_ENVIRONMENT, WG_STATION_ID); snprintf(telemetry_topic, sizeof(telemetry_topic), "wg/v1/%s/stations/%s/telemetry", WG_ENVIRONMENT, WG_STATION_ID); snprintf(ack_topic, sizeof(ack_topic), "wg/v1/%s/stations/%s/acks", WG_ENVIRONMENT, WG_STATION_ID); snprintf(status_topic, sizeof(status_topic), "wg/v1/%s/stations/%s/status", WG_ENVIRONMENT, WG_STATION_ID);
+  reconnect();
+  esp_ota_img_states_t ota_state; const esp_partition_t *running = esp_ota_get_running_partition(); bool verifying = esp_ota_get_state_partition(running, &ota_state) == ESP_OK && ota_state == ESP_OTA_IMG_PENDING_VERIFY;
+  int64_t verify_deadline = esp_timer_get_time() + 120000000LL;
+  command_t command; uint8_t packet[99];
+  while (true) {
+    int64_t now = esp_timer_get_time();
+    if (state.pending && (time(NULL) >= state.deadline || time(NULL) < state.last_epoch || now >= lease_monotonic)) rollback();
+    if (new_connection) { new_connection = false; if (state.last_command[0]) ack(state.last_command, state.last_status); }
+    if (xQueueReceive(commands, &command, 0) == pdTRUE) process_command(command.json);
+    bool got_packet; int channel = 0, rssi = 0;
+    if (current.radio) got_packet = davis_radio_poll(now / 1000, packet, &channel, &rssi);
+    else got_packet = davis_poll(now / 1000, current.seconds, packet);
+    bool failed = current.radio ? davis_radio_failed(now / 1000) : davis_failed();
+    if (got_packet) publish(packet, current.radio ? 10 : 99, channel, rssi);
+    else if (failed && now - last_publish >= current.seconds * 1000000LL) publish(NULL, 0, 0, 0);
+    if (verifying && telemetry_acked && !failed) { ESP_ERROR_CHECK(esp_ota_mark_app_valid_cancel_rollback()); verifying = false; }
+    if (verifying && now >= verify_deadline) esp_ota_mark_app_invalid_rollback_and_reboot();
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}

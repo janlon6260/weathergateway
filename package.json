@@ -1,0 +1,38 @@
+{
+  "name": "weathergateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "scripts": {
+    "dev": "vite --config web/vite.config.js --configLoader native",
+    "dev:server": "node --env-file-if-exists=.env --watch server/index.js",
+    "build": "vite build --config web/vite.config.js --configLoader native",
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "test": "node --test test/*.test.js",
+    "simulate": "node --env-file-if-exists=.env scripts/simulator.js"
+  },
+  "dependencies": {
+    "astronomy-engine": "2.1.19",
+    "better-sqlite3": "^12.4.1",
+    "cookie": "^1.0.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.0",
+    "helmet": "^8.1.0",
+    "ldapts": "^9.2.0",
+    "luxon": "^3.7.2",
+    "mqtt": "^5.14.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "supertest": "^7.1.4",
+    "vite": "^7.1.0"
+  }
+}
