@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { setup } from './helpers.js';
 
-test('non-root preparation uses UID 70002/GID 70007 and never attempts privileged ownership changes', (t) => {
+test('non-root preparation uses UID 70001/GID 70007 and never attempts privileged ownership changes', (t) => {
   const { store } = setup(t),
     data = join(store.root, 'nonroot-data'),
     certificates = join(store.root, 'nonroot-certificates');
@@ -16,11 +16,11 @@ test('non-root preparation uses UID 70002/GID 70007 and never attempts privilege
     import fs from 'node:fs';
     import {syncBuiltinESMExports} from 'node:module';
     const stat = fs.lstatSync;
-    fs.lstatSync = (...args) => { const value = stat(...args); value.uid = 70002; value.gid = 70007; return value; };
+    fs.lstatSync = (...args) => { const value = stat(...args); value.uid = 70001; value.gid = 70007; return value; };
     fs.chownSync = () => { throw Error('Privileged ownership change attempted'); };
     syncBuiltinESMExports();
     Object.defineProperty(process,'platform',{value:'linux'});
-    process.getuid = () => 70002; process.getgid = () => 70007;
+    process.getuid = () => 70001; process.getgid = () => 70007;
     await import('./scripts/prepare-container.js');
   `;
   const output = execFileSync(process.execPath, ['--input-type=module', '-e', code], {
@@ -34,7 +34,7 @@ test('non-root preparation uses UID 70002/GID 70007 and never attempts privilege
     },
   });
   const report = JSON.parse(output);
-  assert.equal(report.uid, 70002);
+  assert.equal(report.uid, 70001);
   assert.equal(report.gid, 70007);
   assert.equal(existsSync(join(data, 'system/mqtt/data')), true);
   assert.equal(existsSync(join(certificates, 'roles/broker')), true);

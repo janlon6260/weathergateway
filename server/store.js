@@ -54,8 +54,9 @@ CREATE TABLE IF NOT EXISTS database_delivery(station_id TEXT NOT NULL,target_has
 `;
 
 export class Store {
-  constructor({ root, environment, readonly = false, clock = Date.now }) {
+  constructor({ root, environment, readonly = false, clock = Date.now, journalMode = 'WAL' }) {
     if (!['development', 'production', 'test'].includes(environment)) throw new Error('Ugyldig miljø');
+    if (!['WAL', 'DELETE'].includes(journalMode)) throw new Error('Ugyldig SQLite-journalmodus');
     this.environment = environment;
     this.clock = clock;
     this.root = resolve(root);
@@ -72,7 +73,9 @@ export class Store {
     this.db.pragma('busy_timeout = 10000');
     this.db.pragma('foreign_keys = ON');
     if (!readonly) {
-      this.db.pragma('journal_mode = WAL');
+      const actualJournal = this.db.pragma(`journal_mode = ${journalMode}`, { simple: true });
+      if (actualJournal !== journalMode.toLowerCase())
+        throw new Error('SQLite-journalmodus kunne ikke aktiveres');
       this.db.pragma('synchronous = FULL');
       this.db.exec(schema);
       if (!this.db.pragma('table_info(commands)').some((c) => c.name === 'sequence'))

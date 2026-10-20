@@ -9,7 +9,16 @@ import { invalidateWeatherCache } from './weather-analytics.js';
 export function publicProjection(source) {
   const root = source.safe('public');
   mkdirSync(root, { recursive: true, mode: 0o750 });
-  const destination = new Store({ root, environment: source.environment, clock: source.clock });
+  // Public mounts this live read model read-only. A WAL database needs readable
+  // WAL/SHM files which disappear when its final writer closes at bootstrap.
+  // A rollback journal lets cold readers start without creating sidecar files.
+  // Main control/ingestion databases retain their default WAL journal mode.
+  const destination = new Store({
+    root,
+    environment: source.environment,
+    clock: source.clock,
+    journalMode: 'DELETE',
+  });
   for (const [path, mode] of [
     ['.environment', 0o640],
     ['system', 0o750],

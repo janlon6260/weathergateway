@@ -75,6 +75,10 @@ Når Apache kjører på samme host, bruk helst 127.0.0.1 som adminbinding og la 
 
 Den offentlige tjenesten får bare `<miljø>/public` montert lesbart. Den får ikke kontrollbasen eller AD-/enhets-/CA-nøkler. Ingen tjeneste får Docker-socket, privilegert modus eller root ved normal drift.
 
+Den offentlige SQLite-kopien bruker `journal_mode=DELETE` slik at en leser kan starte på skrivebeskyttet volum etter at skriveren er lukket, også før MQTT-sertifikater er opprettet. Hoveddatabasen bruker fortsatt WAL. Dette retter `SQLITE_CANTOPEN` ved første `SELECT` i public sin oppstart når WAL-/SHM-filer mangler. [SQLite: lesing fra skrivebeskyttet medium](https://sqlite.org/wal.html#read_only_databases).
+
+Ved oppgradering fra tidligere WAL-basert offentlig kopi: stopp stacken, hent det oppdaterte app-imaget og start stacken med samme volumer. Control konverterer den eksisterende offentlige kopien før den blir friskmeldt og public starter. Behold databaser og SQLite-hjelpefiler; migrasjonen utføres gjennom SQLite. Offentlig datavolum skal fortsatt ha `read_only: true`.
+
 ## Første innlogging og enheter
 
 Logg inn med en AD-konto i konfigurert administratorgruppe. Kontroller Skodje, Håhjem, Longva og Vatne mot faktisk installasjon: modell, posisjon og mm per regnvipp. Standardene er hentet fra det eksisterende Sunnmørsvær-prosjektet.
