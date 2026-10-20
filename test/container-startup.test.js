@@ -1,11 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { setup } from './helpers.js';
+
+test('non-root preparation uses UID 70002/GID 70007 and never attempts privileged ownership changes', (t) => {
+  const { store } = setup(t),
+    data = join(store.root, 'nonroot-data'),
+    certificates = join(store.root, 'nonroot-certificates');
+  // Exercise POSIX ownership rules on every platform, including Windows QA.
+  const code = `
+    import fs from 'node:fs';
+    import {syncBuiltinESMExports} from 'node:module';
+    const stat = fs.lstatSync;
+    fs.lstatSync = (...args) => { const value = stat(...args); value.uid = 70002; value.gid = 70007; return value; };
+    fs.chownSync = () => { throw Error('Privileged ownership change attempted'); };
+    syncBuiltinESMExports();
+    Object.defineProperty(process,'platform',{value:'linux'});
+    process.getuid = () => 70002; process.getgid = () => 70007;
+    await import('./scripts/prepare-container.js');
+  `;
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', code], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      WG_ENVIRONMENT: 'development',
+      WG_DATA_ROOT: data,
+      WG_CERTIFICATE_ROOT: certificates,
+    },
+  });
+  const report = JSON.parse(output);
+  assert.equal(report.uid, 70002);
+  assert.equal(report.gid, 70007);
+  assert.equal(existsSync(join(data, 'system/mqtt/data')), true);
+  assert.equal(existsSync(join(certificates, 'roles/broker')), true);
+  assert.equal(existsSync(join(certificates, 'client-ca.key')), false);
+});
 
 test(
   'actual control process starts from empty certificate and data directories, without an AD CA or password file',
