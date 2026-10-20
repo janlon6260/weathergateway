@@ -10,7 +10,7 @@ AD-bindpassordet kan legges direkte i `.env` som `WG_LDAP_PASSWORD='ditt_passord
 
 `WG_TRUSTED_PROXIES` må være de faktiske proxyadressene sett av containeren; Docker/NAT kan gjøre at Apache fremstår som bridge-gatewayen. `WG_ADMIN_CIDRS` skal bare omfatte de interne nett/VPN som skal ha tilgang. Ikke stol på vilkårlig `X-Forwarded-For` eller hele internett.
 
-Første oppstart bruker `.env` til initialisering. I utviklingsmiljøet kan AD-verdiene korrigeres i `.env` frem til første vellykkede innlogging, så lenge gatewayen fortsatt har revisjon 1 og ingen gatewayendring er opprettet. Bare AD-delen synkroniseres ved restart, og dette logges i audit. Dette gjør at et første feilforsøk ikke låser inn eksempelverdier. Etter innlogging eller en gatewayendring styres vedvarende innstillinger gjennom panelet; en endret seedverdi i `.env` overskriver da ikke bekreftet konfigurasjon. Produksjon synkroniserer aldri en allerede opprettet gateway fra `.env`. Passord og CA-fil leses ved prosessoppstart og krever restart etter endring; i Docker må en container opprettes på nytt når miljøvariabler endres.
+Første oppstart bruker `.env` til initialisering. I utviklingsmiljøet kan AD-verdiene korrigeres i `.env` frem til første vellykkede innlogging, så lenge gatewayen fortsatt har revisjon 1 og ingen gatewayendring er opprettet. Bare AD-delen synkroniseres ved restart, og dette logges i audit. Dette gjør at et første feilforsøk ikke låser inn eksempelverdier. Etter innlogging eller en gatewayendring styres vedvarende innstillinger gjennom panelet; en endret seedverdi i `.env` overskriver da ikke bekreftet konfigurasjon. Produksjon synkroniserer aldri en allerede opprettet gateway fra `.env`. AD-passord leses ved prosessoppstart; AD-CA leses når en katalogforbindelse opprettes. I Docker må en container opprettes på nytt når miljøvariabler endres.
 
 Mellomrom rundt kommaseparerte oppføringer i `WG_ADMIN_CIDRS`, `WG_TRUSTED_PROXIES` og `WG_LDAP_URLS` fjernes før validering. Dermed er eksempelvis `127.0.0.0/8, ::1/128, 172.29.80.0/24` gyldig uten å tillate offentlige nett.
 
@@ -42,22 +42,15 @@ docker pull janlon6260/weathergateway:latest
 
 Miljøeksemplene bruker `WG_IMAGE=janlon6260/weathergateway:latest`. Sett en publisert `sha-...`-tagg eller et konkret digest når installasjonen skal låses til ett bestemt bygg. Begge miljøer kan bruke samme image med ulike innstillinger og datamapper; sett `WG_IMAGE` separat for å prøve et nytt bygg i utvikling før produksjon. Stacken bygger ikke kildekode i Web editor. Et lokalt image kan fortsatt bygges med `docker build --pull -t janlon6260/weathergateway:local .`.
 
-Kontroller at riktig disk er montert før bootstrap. Kjør separat med hvert miljøs `.env`:
+Kontroller at riktig disk er montert. Den oppdaterte stacken kan startes uten sertifikater og trenger ikke host-bootstrap. En kort `prepare`-jobb klargjør mapper/eierskap uten nettverk og avsluttes før ordinære tjenester. Control lager database, offentlig værdatakopi og brokerkonfigurasjon. Broker og worker venter på sertifikater; ingen ukryptert MQTT-lytter opprettes.
 
-```sh
-docker run --rm --user 0:0 --env-file .env \
-  -e WG_HOST_ROOT=/data/req/weathergateway \
-  -v /data/req/weathergateway:/data/req/weathergateway \
-  janlon6260/weathergateway:latest node scripts/bootstrap-host.js
-```
-
-Dette oppretter miljømarkør, database, offentlig værdatakopi, brokerkonfigurasjon/ACL, separat CA, server-/arbeidersertifikater og ECDSA-signaturnøkkel for OTA. Eksisterende nøkler overskrives ikke; gjentatt bootstrap fornyer dem ikke. En ufullstendig nøkkel/sertifikatkombinasjon avbryter oppsettet. Ved IP-tilkobling må brokerens adresser settes i `WG_MQTT_SERVER_NAMES` ved sertifikatutstedelse, slik at de kommer med som IP-SAN.
+Logg inn gjennom intern HTTPS-proxy og åpne **Sertifikater**. Velg gyldighet inntil 50 år, angi DNS-navn/IP-adresser, og opprett CA, MQTT-identiteter og firmware-nøkler. Eksisterende nøkler beholdes. Se [sertifikatveiledningen](certificates.md) for førstegangsoppsett, fornyelse, automatisk tilbakerulling og eksport til HTTPS/SQL.
 
 Legg følgende filer under `/data/req/weathergateway/secrets/<miljø>`:
 
 | Fil                      | Innhold                                                                                            |
 | ------------------------ | -------------------------------------------------------------------------------------------------- |
-| `ldap-password`          | Alternativ til `WG_LDAP_PASSWORD`; bootstrap lager en tom fil som kan stå tom ved direkte passord. |
+| `ldap-password`          | Valgfritt alternativ til `WG_LDAP_PASSWORD`. Kan utelates ved direkte passord. |
 | `ad-ca.pem`              | Organisasjonens CA-kjede for domenekontrollerne i PEM. Dere tilfører denne.                        |
 | `read-token`             | Tilfeldig generert lesetoken for Sunnmørsværs backend.                                             |
 | `client-ca.key` / `.pem` | Miljøets PKI; privat CA-nøkkel monteres bare i kontrolltjenesten.                                  |
@@ -68,7 +61,7 @@ AD-bindpassordet kan settes i `.env` eller Portainers miljøvariabler som beskre
 
 ## Stack og nettverk
 
-For ekstern værdatabaseskriving: sett `WG_DB_ALLOWED_DATABASES` og `WG_DB_PASSWORD` separat per miljø, og konfigurer stasjonene under **Databaser**. Kjør bootstrap på nytt ved oppgradering for å opprette `db-ca.pem`; fyll den med privat database-CA eller la den stå tom for standard CA-er. Bare control og worker får databaselegitimasjon og CA-filen. Se [databaseveiledningen](weather-database.md) for skjema, TLS, kø og samordnet overgang fra eksisterende skriving.
+For ekstern værdatabaseskriving: sett `WG_DB_ALLOWED_DATABASES` og `WG_DB_PASSWORD` separat per miljø, og konfigurer stasjonene under **Databaser**. La `WG_DB_CA_FILE` stå tom ved LAN eller offentlig betrodd DB-CA. Ved en separat privat DB-CA legges `db-ca.pem` i sertifikatmappen og `WG_DB_CA_FILE=/run/secrets/db-ca.pem` settes. Bare control og worker får databaselegitimasjon og DB-CA-filen. Se [databaseveiledningen](weather-database.md) for skjema, TLS, kø og samordnet overgang fra eksisterende skriving.
 
 Gatewayen og SQL-serveren står på samme private nett. Sett `WG_DB_LAN_ENDPOINTS` til de eksakte private vert:port-målene og velg **Privat lokalnett (uten TLS)** per stasjon; dette er standard for nye koblinger. Verdien videresendes bare til control og worker. Denne forbindelsen krever verken TLS eller VPN. TLS med sertifikatkontroll kan velges dersom databaseserveren tilbyr det.
 
@@ -86,9 +79,9 @@ Den offentlige tjenesten får bare `<miljø>/public` montert lesbart. Den får i
 
 Logg inn med en AD-konto i konfigurert administratorgruppe. Kontroller Skodje, Håhjem, Longva og Vatne mot faktisk installasjon: modell, posisjon og mm per regnvipp. Standardene er hentet fra det eksisterende Sunnmørsvær-prosjektet.
 
-Utsted en unik enhetspakke under Enheter og følg `firmware/README.md`. Privatnøkkelen leveres én gang og lagres ikke i databasen. Utviklings- og produksjonssertifikater er ikke ombyttbare.
+Utsted en unik enhetspakke under **Sertifikater**, velg gyldighet og følg `firmware/README.md`. Privatnøkkelen leveres én gang og lagres ikke i databasen. Utviklings- og produksjonssertifikater er ikke ombyttbare.
 
-Enhetssertifikater varer 90 dager og fjernfornyes automatisk når mindre enn 21 dager gjenstår. Server/arbeider varer 365 dager; CA ti år. Kontroller og forny hostsertifikater med `scripts/renew-host-certificates.js`, og opprett berørte containere på nytt etter utskifting av filmonteringer. Se [OTA og sertifikatvedlikehold](firmware-lifecycle.md).
+Enhetssertifikater har valgfri gyldighet inntil 50 år (standard 90 dager) og fjernfornyes når mindre enn 21 dager gjenstår. Server/arbeider og CA har også valgfri gyldighet. Forny dem i **Sertifikater** med test/bekreftelse. Katalogmonteringer og overvåking av sertifikatfiler gjør at broker/worker laster endringer uten nye containere. Se [OTA og sertifikatvedlikehold](firmware-lifecycle.md).
 
 ## Sikkerhetskopi og restore
 

@@ -43,5 +43,6 @@ Miljøknappen åpner den andre, selvstendige installasjonen. Utviklingsendringer
 - [Beregninger og kilder](docs/calculations.md), [Sunnmørsvær-kontrakt](docs/sunnmorsver-compatibility.md) og [Weather Display-matrisen](docs/weather-display-scope.md).
 - [Firmwarebygg](firmware/README.md), [ISS-radio og koblingstabell](docs/davis-radio.md), [leveransestatus og testgrenser](docs/release-status.md).
 - [Signert OTA og sertifikatvedlikehold](docs/firmware-lifecycle.md), [produksjonsakseptanse](docs/production-acceptance.md).
+- [Sertifikater fra adminpanelet og Docker-oppstart uten sertifikatfiler](docs/certificates.md).
 
 Sunnmørsvær-prosjektet er lest lokalt og ikke endret. Den delte ChatGPT-lenken ga ikke tilgang til samtaleinnholdet.

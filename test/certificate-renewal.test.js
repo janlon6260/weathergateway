@@ -28,7 +28,7 @@ test('renewal keeps the private key on the device and retires the old certificat
       'ec_paramgen_curve:prime256v1',
       '-nodes',
       '-days',
-      '2',
+      '365',
       '-keyout',
       keyFile,
       '-out',

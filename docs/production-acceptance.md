@@ -6,10 +6,11 @@ Lokale tester kjøres i prosjektet, ikke i DockerHub-workflowen. DockerHub bygge
 
 | Kontroll                                     | Resultat                                                                                                            |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Full backendkjøring med native integrasjoner | **117 bestått, 0 feil, 0 hoppet over**                                                                              |
+| Full backendkjøring med native integrasjoner | **128 bestått, 0 feil, 0 hoppet over**                                                                              |
 | MariaDB 11.4.13                              | Fire faktiske skjemakopier, NULL-migrasjon, alle felt, Vatne og duplikatvern bestått                                |
 | Mosquitto 2.1.2                              | mTLS, IP-SAN, ACL og varig lagringskvittering bestått                                                               |
 | React                                        | Produksjonsbygg og Edge desktop/mobil bestått, inkludert nye arbeidsflyter og DB-utkast                             |
+| Sertifikatpanel                              | Tom oppstart, CA/MQTT/HTTPS/DB, 50 års gyldighet, mTLS, roller/CSRF, nøkkelbevaring og rollback etter omstart bestått |
 | Produksjonsavhengigheter                     | `npm audit --omit=dev`: 0 kjente sårbarheter                                                                        |
 | Faktisk køkode i C                           | Kapasitet, 400 poster med omløp, 74 avbrutte skriveposisjoner og checkpoint-/sektorslettingsbrudd bestått           |
 | ESP-IDF 6.0.2                                | App 1 049 280 byte; 33 % ledig i hver 1,5 MB OTA-slot                                                               |

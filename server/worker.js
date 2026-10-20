@@ -1,5 +1,6 @@
 import mqtt from 'mqtt';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { X509Certificate, createPublicKey } from 'node:crypto';
 import { ackSchema, id } from './schema.js';
 import { hash, Rejected } from './store.js';
 import { z } from 'zod';
@@ -223,6 +224,74 @@ export function durableTelemetryReceipt(store, stationId, payload, { undated = f
     ...(reason ? { reason } : {}),
   };
 }
+export function startWorkerWhenReady(
+  store,
+  config,
+  databaseWriter,
+  { interval = 2000, logger = (entry) => console.log(JSON.stringify(entry)), start = startWorker } = {},
+) {
+  let active,
+    signature,
+    running,
+    stopped = false,
+    waiting = false;
+  const check = async () => {
+    if (stopped || running) return;
+    running = (async () => {
+      let next;
+      try {
+        const ca = readFileSync(config.mqttCaFile),
+          cert = readFileSync(config.mqttCertFile),
+          key = readFileSync(config.mqttKeyFile);
+        const leaf = new X509Certificate(cert),
+          issuer = new X509Certificate(ca),
+          now = Date.now();
+        if (
+          !leaf.verify(issuer.publicKey) ||
+          !leaf.publicKey.equals(createPublicKey(key)) ||
+          leaf.ca ||
+          !leaf.keyUsage?.includes('1.3.6.1.5.5.7.3.2') ||
+          Date.parse(leaf.validFrom) > now ||
+          Date.parse(leaf.validTo) <= now ||
+          Date.parse(issuer.validTo) <= now
+        )
+          throw Error('Invalid credentials');
+        next = hash(Buffer.concat([ca, cert, key]).toString('utf8'));
+      } catch {
+        if (active) {
+          await active({ force: true });
+          active = null;
+          signature = null;
+        }
+        if (!waiting) logger({ event: 'mqtt_waiting_for_certificates', environment: store.environment });
+        waiting = true;
+        return;
+      }
+      if (next === signature) return;
+      if (active) await active({ force: true });
+      active = start(store, config, databaseWriter);
+      signature = next;
+      waiting = false;
+      logger({ event: 'mqtt_credentials_loaded', environment: store.environment });
+    })();
+    try {
+      await running;
+    } catch {
+      logger({ event: 'mqtt_start_failed', environment: store.environment });
+    } finally {
+      running = null;
+    }
+  };
+  void check();
+  const timer = setInterval(() => void check(), interval);
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    await running;
+    if (active) await active({ force: true });
+  };
+}
+
 export function startWorker(store, config, databaseWriter) {
   if (
     !config.mqttUrl ||
@@ -416,10 +485,10 @@ export function startWorker(store, config, databaseWriter) {
     }
   }, 1000);
   timer.unref();
-  return () =>
+  return ({ force = false } = {}) =>
     new Promise((resolve) => {
       clearInterval(timer);
       projection.close();
-      client.end(false, {}, resolve);
+      client.end(force, {}, resolve);
     });
 }

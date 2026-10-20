@@ -3,6 +3,8 @@ set -eu
 broker_pid=''
 stop_broker() {
   if [ -n "$broker_pid" ]; then kill -TERM "$broker_pid" 2>/dev/null || true; wait "$broker_pid" 2>/dev/null || true; fi
+  broker_pid=''
+  rm -f /tmp/mosquitto.pid
 }
 trap 'stop_broker; exit 0' TERM INT
 start_broker() {
@@ -10,17 +12,30 @@ start_broker() {
   broker_pid=$!
   echo "$broker_pid" > /tmp/mosquitto.pid
 }
-start_broker
-previous=$(cksum /mosquitto/config/acl)
-while kill -0 "$broker_pid" 2>/dev/null; do
-  sleep 2 & wait $! || true
-  current=$(cksum /mosquitto/config/acl)
-  if [ "$current" != "$previous" ]; then
-    # Disconnect existing sessions as well: removing an ACL must revoke an
-    # already connected certificate, not only affect its next connection.
+previous=''
+waiting=''
+while :; do
+  ready=true
+  for file in /mosquitto/config/mosquitto.conf /mosquitto/config/acl /mosquitto/certs/client-ca.pem /mosquitto/certs/server.pem /mosquitto/certs/server.key; do
+    if [ ! -s "$file" ]; then ready=false; fi
+  done
+  if [ "$ready" = false ]; then
     stop_broker
-    previous=$current
+    if [ "$waiting" != true ]; then echo '{"event":"broker_waiting_for_certificates","listenerOpen":false}'; fi
+    waiting=true
+    sleep 2 & wait $! || true
+    continue
+  fi
+  current=$(sha256sum /mosquitto/config/mosquitto.conf /mosquitto/config/acl /mosquitto/certs/client-ca.pem /mosquitto/certs/server.pem /mosquitto/certs/server.key) || continue
+  if [ -z "$broker_pid" ] || ! kill -0 "$broker_pid" 2>/dev/null; then
+    start_broker
+  elif [ "$current" != "$previous" ]; then
+    # Reload through a clean restart so revoked identities and replaced
+    # certificates also take effect for already connected clients.
+    stop_broker
     start_broker
   fi
+  previous=$current
+  waiting=false
+  sleep 2 & wait $! || true
 done
-wait "$broker_pid"

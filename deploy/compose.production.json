@@ -1,15 +1,84 @@
 {
   "name": "wg-production",
   "services": {
+    "prepare": {
+      "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
+      "restart": "no",
+      "init": true,
+      "user": "0:0",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=64m"
+      ],
+      "mem_limit": "512m",
+      "cpus": "1.5",
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "cap_add": [
+        "CHOWN",
+        "FOWNER",
+        "DAC_OVERRIDE"
+      ],
+      "command": [
+        "node",
+        "scripts/prepare-container.js"
+      ],
+      "environment": {
+        "WG_ENVIRONMENT": "production",
+        "WG_DATA_ROOT": "/data",
+        "WG_CERTIFICATE_ROOT": "/certificates"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/data/req/weathergateway/production",
+          "target": "/data",
+          "read_only": false,
+          "bind": {
+            "create_host_path": true
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/data/req/weathergateway/secrets/production",
+          "target": "/certificates",
+          "read_only": false,
+          "bind": {
+            "create_host_path": true
+          }
+        }
+      ],
+      "healthcheck": {
+        "disable": true
+      },
+      "network_mode": "none"
+    },
     "control": {
       "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
       "restart": "unless-stopped",
       "init": true,
       "user": "10001:10001",
       "read_only": true,
-      "cap_drop": ["ALL"],
-      "security_opt": ["no-new-privileges:true"],
-      "tmpfs": ["/tmp:rw,noexec,nosuid,size=64m"],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=64m"
+      ],
       "mem_limit": "512m",
       "cpus": "1.5",
       "logging": {
@@ -29,6 +98,8 @@
         "WG_DEVELOPMENT_ORIGIN": "${WG_DEVELOPMENT_ORIGIN}",
         "WG_PRODUCTION_ORIGIN": "${WG_PRODUCTION_ORIGIN}",
         "WG_ROLE": "control",
+        "WG_CERTIFICATE_ROOT": "/run/secrets",
+        "WG_MQTT_SERVER_NAMES": "${WG_MQTT_SERVER_NAMES:-}",
         "WG_DB_ALLOWED_DATABASES": "${WG_DB_ALLOWED_DATABASES:-}",
         "WG_DB_LAN_ENDPOINTS": "${WG_DB_LAN_ENDPOINTS:-}",
         "WG_DB_PASSWORD": "${WG_DB_PASSWORD:-}",
@@ -36,7 +107,9 @@
         "WG_DB_PASSWORD_HAHJEM": "${WG_DB_PASSWORD_HAHJEM:-}",
         "WG_DB_PASSWORD_LONGVA": "${WG_DB_PASSWORD_LONGVA:-}",
         "WG_DB_PASSWORD_VATNE": "${WG_DB_PASSWORD_VATNE:-}",
-        "WG_DB_CA_FILE": "/run/secrets/db-ca.pem",
+        "WG_DB_CA_FILE": "${WG_DB_CA_FILE:-}",
+        "WG_DB_CERT_FILE": "${WG_DB_CERT_FILE:-}",
+        "WG_DB_KEY_FILE": "${WG_DB_KEY_FILE:-}",
         "WG_ADMIN_CIDRS": "${WG_ADMIN_CIDRS}",
         "WG_TRUSTED_PROXIES": "${WG_TRUSTED_PROXIES}",
         "WG_LDAP_URLS": "${WG_LDAP_URLS}",
@@ -62,61 +135,25 @@
         },
         {
           "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/ldap-password",
-          "target": "/run/secrets/ldap-password",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/ad-ca.pem",
-          "target": "/run/secrets/ad-ca.pem",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/client-ca.key",
-          "target": "/run/secrets/client-ca.key",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/client-ca.pem",
-          "target": "/run/secrets/client-ca.pem",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/db-ca.pem",
-          "target": "/run/secrets/db-ca.pem",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/firmware-signing-public.pem",
-          "target": "/run/secrets/firmware-signing-public.pem",
-          "read_only": true,
+          "source": "/data/req/weathergateway/secrets/production",
+          "target": "/run/secrets",
+          "read_only": false,
           "bind": {
             "create_host_path": false
           }
         }
       ],
-      "ports": ["${WG_ADMIN_BIND_IP:?Sett en privat LAN-adresse}:18081:8080"],
-      "networks": ["control"]
+      "depends_on": {
+        "prepare": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "ports": [
+        "${WG_ADMIN_BIND_IP:?Sett en privat LAN-adresse}:18081:8080"
+      ],
+      "networks": [
+        "control"
+      ]
     },
     "worker": {
       "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
@@ -124,9 +161,15 @@
       "init": true,
       "user": "10001:10001",
       "read_only": true,
-      "cap_drop": ["ALL"],
-      "security_opt": ["no-new-privileges:true"],
-      "tmpfs": ["/tmp:rw,noexec,nosuid,size=64m"],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=64m"
+      ],
       "mem_limit": "512m",
       "cpus": "1.5",
       "logging": {
@@ -153,7 +196,9 @@
         "WG_DB_PASSWORD_HAHJEM": "${WG_DB_PASSWORD_HAHJEM:-}",
         "WG_DB_PASSWORD_LONGVA": "${WG_DB_PASSWORD_LONGVA:-}",
         "WG_DB_PASSWORD_VATNE": "${WG_DB_PASSWORD_VATNE:-}",
-        "WG_DB_CA_FILE": "/run/secrets/db-ca.pem",
+        "WG_DB_CA_FILE": "${WG_DB_CA_FILE:-}",
+        "WG_DB_CERT_FILE": "${WG_DB_CERT_FILE:-}",
+        "WG_DB_KEY_FILE": "${WG_DB_KEY_FILE:-}",
         "WG_MQTT_URL": "mqtts://broker:8883",
         "WG_MQTT_CA_FILE": "/run/secrets/client-ca.pem",
         "WG_MQTT_CERT_FILE": "/run/secrets/worker.pem",
@@ -171,35 +216,8 @@
         },
         {
           "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/client-ca.pem",
-          "target": "/run/secrets/client-ca.pem",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/worker.pem",
-          "target": "/run/secrets/worker.pem",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/worker.key",
-          "target": "/run/secrets/worker.key",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/db-ca.pem",
-          "target": "/run/secrets/db-ca.pem",
+          "source": "/data/req/weathergateway/secrets/production/roles/worker",
+          "target": "/run/secrets",
           "read_only": true,
           "bind": {
             "create_host_path": false
@@ -211,10 +229,12 @@
           "condition": "service_healthy"
         },
         "broker": {
-          "condition": "service_healthy"
+          "condition": "service_started"
         }
       },
-      "networks": ["ingest"]
+      "networks": [
+        "ingest"
+      ]
     },
     "public": {
       "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
@@ -222,9 +242,15 @@
       "init": true,
       "user": "10002:10001",
       "read_only": true,
-      "cap_drop": ["ALL"],
-      "security_opt": ["no-new-privileges:true"],
-      "tmpfs": ["/tmp:rw,noexec,nosuid,size=64m"],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=64m"
+      ],
       "mem_limit": "512m",
       "cpus": "1.5",
       "logging": {
@@ -244,7 +270,7 @@
         "WG_DEVELOPMENT_ORIGIN": "${WG_DEVELOPMENT_ORIGIN}",
         "WG_PRODUCTION_ORIGIN": "${WG_PRODUCTION_ORIGIN}",
         "WG_ROLE": "public",
-        "WG_READ_TOKEN_FILE": "/run/secrets/read-token"
+        "WG_READ_TOKEN_FILE": "/run/credentials/read-token"
       },
       "volumes": [
         {
@@ -258,33 +284,48 @@
         },
         {
           "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/read-token",
-          "target": "/run/secrets/read-token",
+          "source": "/data/req/weathergateway/secrets/production/roles/public",
+          "target": "/run/credentials",
           "read_only": true,
           "bind": {
             "create_host_path": false
           }
         }
       ],
-      "ports": ["127.0.0.1:18080:8080"],
+      "ports": [
+        "127.0.0.1:18080:8080"
+      ],
       "depends_on": {
         "control": {
           "condition": "service_healthy"
         }
       },
-      "networks": ["public"]
+      "networks": [
+        "public"
+      ]
     },
     "broker": {
-      "image": "eclipse-mosquitto:2.1.2",
+      "image": "eclipse-mosquitto:2.1.2-alpine",
       "restart": "unless-stopped",
       "user": "1883:10001",
       "read_only": true,
-      "cap_drop": ["ALL"],
-      "security_opt": ["no-new-privileges:true"],
-      "tmpfs": ["/tmp:rw,noexec,nosuid,size=16m"],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=16m"
+      ],
       "mem_limit": "128m",
-      "entrypoint": ["/bin/sh", "/mosquitto/config/broker-entrypoint.sh"],
-      "ports": ["${WG_MQTT_BIND_IP:-0.0.0.0}:8883:8883"],
+      "entrypoint": [
+        "/bin/sh",
+        "/mosquitto/config/broker-entrypoint.sh"
+      ],
+      "ports": [
+        "${WG_MQTT_BIND_IP:-0.0.0.0}:8883:8883"
+      ],
       "volumes": [
         {
           "type": "bind",
@@ -306,26 +347,8 @@
         },
         {
           "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/client-ca.pem",
-          "target": "/mosquitto/certs/client-ca.pem",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/server.pem",
-          "target": "/mosquitto/certs/server.pem",
-          "read_only": true,
-          "bind": {
-            "create_host_path": false
-          }
-        },
-        {
-          "type": "bind",
-          "source": "/data/req/weathergateway/secrets/production/server.key",
-          "target": "/mosquitto/certs/server.key",
+          "source": "/data/req/weathergateway/secrets/production/roles/broker",
+          "target": "/mosquitto/certs",
           "read_only": true,
           "bind": {
             "create_host_path": false
@@ -333,7 +356,10 @@
         }
       ],
       "healthcheck": {
-        "test": ["CMD-SHELL", "kill -0 \"$(cat /tmp/mosquitto.pid)\""],
+        "test": [
+          "CMD-SHELL",
+          "kill -0 \"$(cat /tmp/mosquitto.pid)\""
+        ],
         "interval": "10s",
         "timeout": "3s",
         "retries": 3
@@ -345,7 +371,14 @@
           "max-file": "3"
         }
       },
-      "networks": ["ingest"]
+      "networks": [
+        "ingest"
+      ],
+      "depends_on": {
+        "control": {
+          "condition": "service_healthy"
+        }
+      }
     }
   },
   "networks": {

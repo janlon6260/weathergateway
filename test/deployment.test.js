@@ -29,6 +29,14 @@ test('Portainer stacks have independent literal mounts, ports and networks', () 
     );
     assert.equal(JSON.stringify(stack.services.worker).includes('client-ca.key'), false);
     assert.equal(JSON.stringify(stack).includes('/var/run/docker.sock'), false);
+    assert.equal(stack.services.prepare.user, '0:0');
+    assert.equal(stack.services.prepare.network_mode, 'none');
+    assert.ok(stack.services.control.volumes.every((v) => !/\.(pem|key)$/.test(v.source)));
+    assert.equal(stack.services.control.depends_on.prepare.condition, 'service_completed_successfully');
+    assert.equal(stack.services.worker.depends_on.broker.condition, 'service_started');
+    assert.ok(stack.services.worker.volumes.some((v) => v.source.endsWith('/roles/worker') && v.read_only));
+    assert.ok(stack.services.broker.volumes.some((v) => v.source.endsWith('/roles/broker') && v.read_only));
+    assert.ok(stack.services.public.volumes.some((v) => v.source.endsWith('/roles/public') && v.read_only));
   }
   assert.notEqual(prod.services.control.ports[0], dev.services.control.ports[0]);
   assert.notEqual(prod.services.broker.ports[0], dev.services.broker.ports[0]);

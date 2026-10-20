@@ -45,13 +45,19 @@ export class Directory {
     logger = (entry) => console.error(JSON.stringify(entry)),
   }) {
     this.password = password;
-    this.ca = caFile ? readFileSync(caFile) : undefined;
+    this.caFile = caFile;
     this.clientFactory = clientFactory;
     this.logger = logger;
   }
   async withClient(settings, operation) {
     if (!settings.urls.length || !settings.baseDn || !settings.bindDn || !this.password)
       throw new Rejected('AD er ikke konfigurert', 503);
+    let ca;
+    try {
+      ca = this.caFile ? readFileSync(this.caFile) : undefined;
+    } catch {
+      throw new Rejected('AD-CA mangler eller kan ikke leses. Legg inn riktig AD-CA separat.', 503);
+    }
     for (const [index, url] of settings.urls.entries()) {
       const u = new URL(url);
       if (u.protocol !== 'ldaps:') throw new Error('Ukryptert LDAP er deaktivert');
@@ -63,7 +69,7 @@ export class Directory {
           minVersion: 'TLSv1.2',
           rejectUnauthorized: true,
           servername: u.hostname,
-          ...(this.ca ? { ca: this.ca } : {}),
+          ...(ca ? { ca } : {}),
         },
       });
       let stage = 'service_bind';

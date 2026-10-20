@@ -60,8 +60,21 @@ export class WeatherDatabase {
     if (target.transport === 'lan') transport = lanTransport(target, this.config.databaseLanEndpoints);
     else {
       const ca = this.config.databaseCaFile ? readFileSync(this.config.databaseCaFile, 'utf8').trim() : '';
+      const certFile = this.config.databaseCertFile,
+        keyFile = this.config.databaseKeyFile;
+      if (!!certFile !== !!keyFile)
+        throw new Rejected('Databaseklient krever både sertifikat og privatnøkkel.');
+      const identity = certFile
+        ? { cert: readFileSync(certFile, 'utf8'), key: readFileSync(keyFile, 'utf8') }
+        : {};
       transport = {
-        ssl: { rejectUnauthorized: true, verifyIdentity: true, minVersion: 'TLSv1.2', ...(ca ? { ca } : {}) },
+        ssl: {
+          rejectUnauthorized: true,
+          verifyIdentity: true,
+          minVersion: 'TLSv1.2',
+          ...(ca ? { ca } : {}),
+          ...identity,
+        },
       };
     }
     return {

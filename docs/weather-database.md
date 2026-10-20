@@ -14,7 +14,7 @@ WG_DB_PASSWORD='passordet_til_skrivekontoen'
 # WG_DB_CA_FILE=runtime/secrets/database-ca.pem
 ```
 
-Bruk de faktiske databasenavnene; navnene over er plassholdere. På deres private lokalnett kreves verken TLS eller VPN mot SQL-serveren. Dersom TLS velges, bruker en tom `WG_DB_CA_FILE` Node sine vanlige betrodde CA-er. Privat CA angis som PEM-fil. I Docker monteres `secrets/<miljø>/db-ca.pem` bare i control og worker; en tom fil bruker standard CA-er i TLS-modus. Kjør host-bootstrap på nytt ved oppgradering slik at den nye filen opprettes. Eksisterende nøkler overskrives ikke.
+Bruk de faktiske databasenavnene; navnene over er plassholdere. På deres private lokalnett kreves verken TLS eller VPN mot SQL-serveren. Dersom TLS velges, bruker en tom `WG_DB_CA_FILE` Node sine vanlige betrodde CA-er. Privat CA angis som PEM-fil. En separat `secrets/<miljø>/db-ca.pem` kopieres bare til control/worker, og velges med `WG_DB_CA_FILE=/run/secrets/db-ca.pem`. Host-bootstrap trengs ikke. DB-server-/klientsertifikater kan utstedes i **Sertifikater**; se [veiledningen](certificates.md). Eksisterende LAN-forbindelser endres ikke automatisk til TLS.
 
 Passordet sendes aldri til nettleseren eller lagres i konfigurasjon, audit eller leveringskø. Ulike skrivekontoer kan bruke `WG_DB_PASSWORD_SKODJE`, `WG_DB_PASSWORD_HAHJEM`, `WG_DB_PASSWORD_LONGVA` og `WG_DB_PASSWORD_VATNE`. Velg variabelnavnet i stasjonens databaseinnstillinger. Lokal kjøring støtter også andre variabler med prefikset `WG_DB_PASSWORD_`; ekstra variabler må videresendes eksplisitt i Docker-stacken. Start control og worker på nytt etter endring av miljøvariabler; Docker-containere må opprettes på nytt.
 

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
 import { gatewaySchema, defaultDevice, databaseSchema } from './schema.js';
 
 const commaSeparated = (value) =>
@@ -7,10 +8,15 @@ const commaSeparated = (value) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
-export function secret(name, env = process.env) {
-  return env[`${name}_FILE`]
-    ? readFileSync(env[`${name}_FILE`], 'utf8').replace(/\r?\n$/, '')
-    : env[name] || '';
+export function secret(name, env = process.env, { optional = false } = {}) {
+  try {
+    return env[`${name}_FILE`]
+      ? readFileSync(env[`${name}_FILE`], 'utf8').replace(/\r?\n$/, '')
+      : env[name] || '';
+  } catch (error) {
+    if (optional && error.code === 'ENOENT') return '';
+    throw error;
+  }
 }
 export function configuration(env = process.env) {
   const environment = env.WG_ENVIRONMENT || 'development',
@@ -39,23 +45,37 @@ export function configuration(env = process.env) {
   });
   if (environment === 'production' && new URL(defaults.adminOrigin).protocol !== 'https:')
     throw new Error('Produksjon krever HTTPS-adresse');
+  const root = env.WG_DATA_ROOT || `runtime/${environment}`;
+  const certificateRoot = resolve(
+    env.WG_CERTIFICATE_ROOT ||
+      (env.WG_ISSUER_KEY_FILE
+        ? dirname(env.WG_ISSUER_KEY_FILE)
+        : env.WG_FIRMWARE_PUBLIC_KEY_FILE
+          ? dirname(env.WG_FIRMWARE_PUBLIC_KEY_FILE)
+          : join(root, 'system', 'certificates')),
+  );
   return {
     environment,
     role,
     bind,
     port: Number(env.PORT || 8080),
-    root: env.WG_DATA_ROOT || `runtime/${environment}`,
+    root,
+    certificateRoot,
+    issuerKeyFile: env.WG_ISSUER_KEY_FILE || join(certificateRoot, 'client-ca.key'),
+    issuerCaFile: env.WG_ISSUER_CA_FILE || join(certificateRoot, 'client-ca.pem'),
     secureCookies,
     defaults,
     adminCidrs: commaSeparated(
       env.WG_ADMIN_CIDRS || '127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7',
     ),
     trustedProxies: commaSeparated(env.WG_TRUSTED_PROXIES || ''),
-    publicToken: secret('WG_READ_TOKEN', env),
+    publicToken: secret('WG_READ_TOKEN', env, { optional: true }),
+    publicTokenFile: env.WG_READ_TOKEN_FILE,
     // A non-empty inline AD password takes precedence over the optional file.
-    ldapPassword: env.WG_LDAP_PASSWORD || secret('WG_LDAP_PASSWORD', env),
+    ldapPassword: env.WG_LDAP_PASSWORD || secret('WG_LDAP_PASSWORD', env, { optional: true }),
     ldapCaFile: env.WG_LDAP_CA_FILE,
     mqttUrl: env.WG_MQTT_URL,
+    mqttServerNames: commaSeparated(env.WG_MQTT_SERVER_NAMES || ''),
     mqttCaFile: env.WG_MQTT_CA_FILE,
     mqttCertFile: env.WG_MQTT_CERT_FILE,
     mqttKeyFile: env.WG_MQTT_KEY_FILE,
@@ -65,7 +85,10 @@ export function configuration(env = process.env) {
     databaseAllowlist: commaSeparated(env.WG_DB_ALLOWED_DATABASES || ''),
     databaseLanEndpoints: commaSeparated(env.WG_DB_LAN_ENDPOINTS ?? env.WG_DB_TUNNEL_ENDPOINTS ?? ''),
     databaseCaFile: env.WG_DB_CA_FILE || undefined,
-    firmwarePublicKeyFile: env.WG_FIRMWARE_PUBLIC_KEY_FILE || undefined,
+    databaseCertFile: env.WG_DB_CERT_FILE || undefined,
+    databaseKeyFile: env.WG_DB_KEY_FILE || undefined,
+    firmwarePublicKeyFile:
+      env.WG_FIRMWARE_PUBLIC_KEY_FILE || join(certificateRoot, 'firmware-signing-public.pem'),
   };
 }
 const seeds = [

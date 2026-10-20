@@ -1,9 +1,9 @@
 import { isIP } from 'node:net';
-export function mqttSubjectAltNames(primary, additional = '') {
+export function mqttSubjectAltNames(primary, additional = '', includeBroker = true) {
   const values = [
     ...new Set([
       primary,
-      'broker',
+      ...(includeBroker ? ['broker'] : []),
       ...additional
         .split(',')
         .map((v) => v.trim())

@@ -3,10 +3,12 @@ import { configuration, initialize } from './bootstrap.js';
 import { Store } from './store.js';
 import { Directory } from './directory.js';
 import { controlApp, publicApp } from './app.js';
-import { startWorker } from './worker.js';
+import { startWorkerWhenReady } from './worker.js';
 import { CertificateIssuer, syncAcl, renewalProcessor } from './pki.js';
 import { finishBackups, recoverBackups, scheduleBackup } from './backups.js';
 import { WeatherDatabase } from './weather-database.js';
+import { CertificateManager } from './certificates.js';
+import { prepareRuntime } from './runtime-files.js';
 
 process.umask(0o027);
 const config = configuration(),
@@ -16,13 +18,15 @@ const config = configuration(),
     readonly: config.role === 'public',
   });
 if (config.role !== 'public') initialize(store, config.defaults);
+if (config.role === 'control') prepareRuntime(store);
+const certificateManager = config.role === 'control' ? new CertificateManager({ store, config }) : null;
 const databaseWriter = config.role === 'public' ? null : new WeatherDatabase(store, config);
 const certificates =
-  config.role === 'control' && process.env.WG_ISSUER_KEY_FILE
+  config.role === 'control'
     ? new CertificateIssuer({
         store,
-        keyFile: process.env.WG_ISSUER_KEY_FILE,
-        caFile: process.env.WG_ISSUER_CA_FILE,
+        keyFile: config.issuerKeyFile,
+        caFile: config.issuerCaFile,
       })
     : null;
 const renewCertificates = config.role === 'control' ? renewalProcessor(store, certificates) : null;
@@ -35,7 +39,7 @@ let server,
   stopWorker = async () => {},
   timer,
   renewalTask = null;
-if (config.role === 'worker') stopWorker = startWorker(store, config, databaseWriter);
+if (config.role === 'worker') stopWorker = startWorkerWhenReady(store, config, databaseWriter);
 else {
   const service =
     config.role === 'public'
@@ -46,6 +50,7 @@ else {
           databaseWriter,
           directory: new Directory({ password: config.ldapPassword, caFile: config.ldapCaFile }),
           certificates,
+          certificateManager,
         });
   server = createServer(service.app);
   server.requestTimeout = 15000;
@@ -68,9 +73,10 @@ if (config.role === 'control') {
   timer = setInterval(() => {
     try {
       store.sweep();
+      certificateManager.sweep();
       syncAcl(store);
       if (++backupCheck % 60 === 0) scheduleBackup(store);
-      if (!renewalTask)
+      if (!renewalTask && certificateManager.pending()?.type !== 'ca')
         renewalTask = renewCertificates()
           .catch((error) =>
             console.error(

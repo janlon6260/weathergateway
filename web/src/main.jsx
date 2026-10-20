@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import { CertificateAdministration } from './certificates.jsx';
 import { meteorologyDefaults, calibrationDefaults } from '../../shared/meteorology-settings.js';
 import { alarmMetrics } from '../../shared/alarm-metrics.js';
 import {
@@ -21,6 +22,7 @@ const labels = {
   firmware: 'Firmware',
   alarms: 'Alarmer',
   readiness: 'Produksjonsstatus',
+  certificates: 'Sertifikater',
 };
 const pageDescriptions = {
   overview: 'Status og siste målinger fra værstasjonene dine.',
@@ -34,6 +36,7 @@ const pageDescriptions = {
   firmware: 'Signerte utgivelser og kontrollert oppdatering av enhetene.',
   alarms: 'Alarmregler, aktive varsler og hendelseshistorikk.',
   readiness: 'Driftskontroller og dokumenterte prøver før produksjon.',
+  certificates: 'CA, tjenestesertifikater, ESP32-identiteter og firmware-nøkler.',
 };
 const stateLabels = {
   draft: 'Utkast',
@@ -275,7 +278,10 @@ function App() {
   );
   const openChanges = data.changes.filter((c) => ['draft', 'testing', 'confirming'].includes(c.state));
   const visiblePages = Object.keys(labels)
-    .filter((p) => !['settings', 'audit', 'databases', 'firmware', 'readiness'].includes(p) || admin)
+    .filter(
+      (p) =>
+        !['settings', 'audit', 'databases', 'firmware', 'readiness', 'certificates'].includes(p) || admin,
+    )
     .filter((p) => p !== 'devices' || operator);
   function scopeName(scope) {
     return scope === 'gateway'
@@ -379,7 +385,7 @@ function App() {
           {visiblePages.map((p) => (
             <button key={p} className={page === p ? 'active' : ''} onClick={() => setPage(p)}>
               <span className="nav-icon" aria-hidden="true">
-                {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓'][Object.keys(labels).indexOf(p)]}
+                {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓', '◇'][Object.keys(labels).indexOf(p)]}
               </span>
               {labels[p]}
               {p === 'changes' && openChanges.length > 0 && (
@@ -684,19 +690,7 @@ function App() {
                         </button>
                         <button onClick={() => setModal({ type: 'restart', station })}>Restart</button>
                         {admin && (
-                          <button
-                            onClick={() =>
-                              action(async () => {
-                                const result = await api(`/devices/${station.id}/certificate`, {});
-                                download(`esp32-${station.key}-credentials.json`, result);
-                                setNotice(
-                                  'Enhetspakken er lastet ned. Den inneholder en privatnøkkel og må oppbevares sikkert.',
-                                );
-                              })
-                            }
-                          >
-                            Utsted sertifikat
-                          </button>
+                          <button onClick={() => setPage('certificates')}>Administrer sertifikater</button>
                         )}
                       </div>
                     </section>
@@ -754,6 +748,9 @@ function App() {
               />
               <Operations api={api} onError={setError} />
             </>
+          )}
+          {page === 'certificates' && admin && (
+            <CertificateAdministration api={api} stations={data.stations} onError={setError} />
           )}
           {page === 'databases' && admin && (
             <section className="panel settings-form">
@@ -2417,70 +2414,6 @@ function Reports({ stations, api, onError, admin }) {
           )}
         </>
       )}
-    </section>
-  );
-}
-function Certificates({ api, stations, onError }) {
-  const [certs, setCerts] = useState([]),
-    [busy, setBusy] = useState(false);
-  const reload = () =>
-    api('/certificates')
-      .then(setCerts)
-      .catch((e) => onError(e.message));
-  useEffect(() => {
-    reload();
-  }, []);
-  return (
-    <section className="panel">
-      <div className="panel-heading">
-        <h2>Enhetssertifikater</h2>
-        <button onClick={reload}>Oppdater</button>
-      </div>
-      <p className="muted small">
-        Sperring av et sertifikat avslutter MQTT-forbindelsene slik at tilgangene kontrolleres på nytt.
-      </p>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Stasjon</th>
-              <th>Utløper</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {certs.map((c) => (
-              <tr key={c.id}>
-                <td>{stations.find((s) => s.value.id === c.station_id)?.value.name || c.station_id}</td>
-                <td>{time(c.expires_at)}</td>
-                <td>{c.revoked_at ? 'Sperret' : Date.now() >= c.expires_at ? 'Utløpt' : 'Gyldig'}</td>
-                <td>
-                  {!c.revoked_at && (
-                    <button
-                      disabled={busy}
-                      onClick={async () => {
-                        setBusy(true);
-                        try {
-                          await api(`/certificates/${c.id}/revoke`, {});
-                          await reload();
-                        } catch (e) {
-                          onError(e.message);
-                        } finally {
-                          setBusy(false);
-                        }
-                      }}
-                    >
-                      Sperr
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {!certs.length && <p className="empty">Ingen sertifikater er utstedt.</p>}
     </section>
   );
 }

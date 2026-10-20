@@ -27,7 +27,7 @@ test('real device certificate is signed with client-only usage and bound to its 
       'ec_paramgen_curve:prime256v1',
       '-nodes',
       '-days',
-      '1',
+      '2',
       '-keyout',
       keyFile,
       '-out',

@@ -3,7 +3,7 @@ import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { Server as SocketServer } from 'socket.io';
 import { resolve, join } from 'node:path';
-import { accessSync, constants, readFileSync } from 'node:fs';
+import { accessSync, constants, readFileSync, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Rejected, hash } from './store.js';
@@ -21,6 +21,7 @@ import { climateDay } from './weather-analytics.js';
 import { records, climateText, renderTemplate } from './reports.js';
 import { importHistory } from './history-import.js';
 import { readiness, acceptanceChecks, deploymentFingerprint } from './readiness.js';
+import { validitySchema } from './certificate-validity.js';
 
 const safeGatewayFields = [
   'confirmationSeconds',
@@ -102,7 +103,7 @@ export async function probe(store, directory, change, principal, databaseWriter)
       );
   return report;
 }
-export function controlApp({ store, config, directory, certificates, databaseWriter }) {
+export function controlApp({ store, config, directory, certificates, certificateManager, databaseWriter }) {
   const app = baseApp(config),
     sessions = new Sessions(store, directory, { secure: config.secureCookies }),
     allowedNetwork = privateNetworks(config.adminCidrs),
@@ -447,7 +448,15 @@ export function controlApp({ store, config, directory, certificates, databaseWri
       const stationId = id.parse(req.params.stationId);
       store.current(`station:${stationId}`);
       if (!certificates) throw new Rejected('Sertifikatutsteder er ikke konfigurert', 503);
-      const bundle = await certificates.issue(stationId),
+      if (certificateManager?.pending()?.type === 'ca')
+        throw new Rejected('Fullfør CA-endringen før du utsteder enhetssertifikater.');
+      const { validity } = z
+        .object({ validity: validitySchema.optional() })
+        .strict()
+        .parse(req.body || {});
+      if (config.firmwarePublicKeyFile && !existsSync(config.firmwarePublicKeyFile))
+        throw new Rejected('Initialiser sertifikater og firmware-nøkler under Sertifikater først.', 409);
+      const bundle = await certificates.issue(stationId, validity),
         configuration = store.current(`device:${stationId}`).value;
       store.audit(req.session.principal.sid, 'certificate_issued', {
         stationId,
@@ -465,6 +474,30 @@ export function controlApp({ store, config, directory, certificates, databaseWri
     }),
   );
   app.get('/api/audit', permission('administrator'), (_req, res) => res.json(store.events()));
+  app.use('/api/pki', permission('administrator'), (_req, _res, next) => {
+    if (!certificateManager) return next(new Rejected('Sertifikatbehandling er ikke tilgjengelig', 503));
+    next();
+  });
+  app.get('/api/pki', (_req, res) => res.json(certificateManager.status()));
+  app.post(
+    '/api/pki/initialize',
+    asyncHandler(async (req, res) =>
+      res.status(201).json(await certificateManager.initialize(req.body, req.session.principal.sid)),
+    ),
+  );
+  app.post(
+    '/api/pki/changes',
+    asyncHandler(async (req, res) =>
+      res.status(201).json(await certificateManager.stage(req.body, req.session.principal.sid)),
+    ),
+  );
+  for (const operation of ['test', 'confirm', 'rollback'])
+    app.post(`/api/pki/changes/:changeId/${operation}`, (req, res) =>
+      res.json(certificateManager[operation](id.parse(req.params.changeId), req.session.principal.sid)),
+    );
+  app.post('/api/pki/export/:type', (req, res) =>
+    res.json(certificateManager.export(req.params.type, req.session.principal.sid)),
+  );
   app.get('/api/certificates', permission('administrator'), (_req, res) =>
     res.json(
       store.db
@@ -603,7 +636,17 @@ export function controlApp({ store, config, directory, certificates, databaseWri
 export function publicApp({ store, config }) {
   const app = baseApp(config);
   app.use(rateLimit({ windowMs: 60000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
-  const authorized = (token) => config.publicToken.length >= 32 && equal(token, config.publicToken);
+  const authorized = (token) => {
+    let expected = config.publicToken;
+    if (config.publicTokenFile) {
+      try {
+        expected = readFileSync(config.publicTokenFile, 'utf8').trim();
+      } catch {
+        return false;
+      }
+    }
+    return expected?.length >= 32 && equal(token, expected);
+  };
   app.use((req, res, next) =>
     authorized(req.headers.authorization?.replace(/^Bearer /, ''))
       ? next()

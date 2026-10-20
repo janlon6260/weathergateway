@@ -7,6 +7,7 @@ import { join, resolve, relative, basename } from 'node:path';
 import { randomBytes, randomUUID, X509Certificate } from 'node:crypto';
 import { id } from './schema.js';
 import { Rejected } from './store.js';
+import { issuedDays } from './certificate-validity.js';
 
 const execute = promisify(execFile);
 export const opensslExecutable =
@@ -21,8 +22,9 @@ export class CertificateIssuer {
     this.store = store;
     this.openssl = openssl;
   }
-  async issue(stationId) {
+  async issue(stationId, validity = { amount: 90, unit: 'days' }) {
     id.parse(stationId);
+    const days = issuedDays(this.caFile, validity);
     const tempRoot = resolve(tmpdir()),
       directory = await mkdtemp(join(tempRoot, 'wg-cert-'));
     try {
@@ -70,7 +72,7 @@ export class CertificateIssuer {
           '-set_serial',
           `0x${serial}`,
           '-days',
-          '90',
+          String(days),
           '-sha256',
           '-extfile',
           extensions,
@@ -140,7 +142,22 @@ export class CertificateIssuer {
           '-set_serial',
           `0x${serial}`,
           '-days',
-          '90',
+          String(
+            issuedDays(this.caFile, {
+              amount: Math.max(
+                1,
+                Math.min(
+                  18262,
+                  Math.round(
+                    (Date.parse(new X509Certificate(previous.certificate).validTo) -
+                      Date.parse(new X509Certificate(previous.certificate).validFrom)) /
+                      86400000,
+                  ),
+                ),
+              ),
+              unit: 'days',
+            }),
+          ),
           '-sha256',
           '-extfile',
           extensions,

@@ -5,12 +5,12 @@ for (const env of ['production', 'development']) {
   const root = `/data/req/weathergateway/${env}`,
     secrets = `/data/req/weathergateway/secrets/${env}`,
     port = env === 'production' ? 18080 : 18090;
-  const bind = (source, target, read_only = true) => ({
+  const bind = (source, target, read_only = true, create = false) => ({
     type: 'bind',
     source,
     target,
     read_only,
-    bind: { create_host_path: false },
+    bind: { create_host_path: create },
   });
   const base = {
     image: '${WG_IMAGE:-janlon6260/weathergateway:latest}',
@@ -43,13 +43,17 @@ for (const env of ['production', 'development']) {
     WG_DB_PASSWORD_HAHJEM: '${WG_DB_PASSWORD_HAHJEM:-}',
     WG_DB_PASSWORD_LONGVA: '${WG_DB_PASSWORD_LONGVA:-}',
     WG_DB_PASSWORD_VATNE: '${WG_DB_PASSWORD_VATNE:-}',
-    WG_DB_CA_FILE: '/run/secrets/db-ca.pem',
+    WG_DB_CA_FILE: '${WG_DB_CA_FILE:-}',
+    WG_DB_CERT_FILE: '${WG_DB_CERT_FILE:-}',
+    WG_DB_KEY_FILE: '${WG_DB_KEY_FILE:-}',
   };
   const control = {
     ...base,
     environment: {
       ...shared,
       WG_ROLE: 'control',
+      WG_CERTIFICATE_ROOT: '/run/secrets',
+      WG_MQTT_SERVER_NAMES: '${WG_MQTT_SERVER_NAMES:-}',
       ...databases,
       WG_ADMIN_CIDRS: '${WG_ADMIN_CIDRS}',
       WG_TRUSTED_PROXIES: '${WG_TRUSTED_PROXIES}',
@@ -64,17 +68,8 @@ for (const env of ['production', 'development']) {
       WG_ISSUER_CA_FILE: '/run/secrets/client-ca.pem',
       WG_FIRMWARE_PUBLIC_KEY_FILE: '/run/secrets/firmware-signing-public.pem',
     },
-    volumes: [
-      bind(root, '/data', false),
-      ...[
-        'ldap-password',
-        'ad-ca.pem',
-        'client-ca.key',
-        'client-ca.pem',
-        'db-ca.pem',
-        'firmware-signing-public.pem',
-      ].map((f) => bind(`${secrets}/${f}`, `/run/secrets/${f}`)),
-    ],
+    volumes: [bind(root, '/data', false), bind(secrets, '/run/secrets', false)],
+    depends_on: { prepare: { condition: 'service_completed_successfully' } },
     ports: ['${WG_ADMIN_BIND_IP:?Sett en privat LAN-adresse}:' + (port + 1) + ':8080'],
     networks: ['control'],
   };
@@ -89,26 +84,21 @@ for (const env of ['production', 'development']) {
       WG_MQTT_CERT_FILE: '/run/secrets/worker.pem',
       WG_MQTT_KEY_FILE: '/run/secrets/worker.key',
     },
-    volumes: [
-      bind(root, '/data', false),
-      ...['client-ca.pem', 'worker.pem', 'worker.key', 'db-ca.pem'].map((f) =>
-        bind(`${secrets}/${f}`, `/run/secrets/${f}`),
-      ),
-    ],
-    depends_on: { control: { condition: 'service_healthy' }, broker: { condition: 'service_healthy' } },
+    volumes: [bind(root, '/data', false), bind(`${secrets}/roles/worker`, '/run/secrets')],
+    depends_on: { control: { condition: 'service_healthy' }, broker: { condition: 'service_started' } },
     networks: ['ingest'],
   };
   const publicApi = {
     ...base,
     user: '10002:10001',
-    environment: { ...shared, WG_ROLE: 'public', WG_READ_TOKEN_FILE: '/run/secrets/read-token' },
-    volumes: [bind(`${root}/public`, '/data'), bind(`${secrets}/read-token`, '/run/secrets/read-token')],
+    environment: { ...shared, WG_ROLE: 'public', WG_READ_TOKEN_FILE: '/run/credentials/read-token' },
+    volumes: [bind(`${root}/public`, '/data'), bind(`${secrets}/roles/public`, '/run/credentials')],
     ports: [`127.0.0.1:${port}:8080`],
     depends_on: { control: { condition: 'service_healthy' } },
     networks: ['public'],
   };
   const broker = {
-    image: 'eclipse-mosquitto:2.1.2',
+    image: 'eclipse-mosquitto:2.1.2-alpine',
     restart: 'unless-stopped',
     user: '1883:10001',
     read_only: true,
@@ -121,9 +111,7 @@ for (const env of ['production', 'development']) {
     volumes: [
       bind(`${root}/system/mqtt`, '/mosquitto/config'),
       bind(`${root}/system/mqtt/data`, '/mosquitto/data', false),
-      ...['client-ca.pem', 'server.pem', 'server.key'].map((f) =>
-        bind(`${secrets}/${f}`, `/mosquitto/certs/${f}`),
-      ),
+      bind(`${secrets}/roles/broker`, '/mosquitto/certs'),
     ],
     healthcheck: {
       test: ['CMD-SHELL', 'kill -0 "$(cat /tmp/mosquitto.pid)"'],
@@ -133,13 +121,25 @@ for (const env of ['production', 'development']) {
     },
     logging: base.logging,
     networks: ['ingest'],
+    depends_on: { control: { condition: 'service_healthy' } },
+  };
+  const prepare = {
+    ...base,
+    user: '0:0',
+    restart: 'no',
+    cap_add: ['CHOWN', 'FOWNER', 'DAC_OVERRIDE'],
+    command: ['node', 'scripts/prepare-container.js'],
+    environment: { WG_ENVIRONMENT: env, WG_DATA_ROOT: '/data', WG_CERTIFICATE_ROOT: '/certificates' },
+    volumes: [bind(root, '/data', false, true), bind(secrets, '/certificates', false, true)],
+    healthcheck: { disable: true },
+    network_mode: 'none',
   };
   writeFileSync(
     `deploy/compose.${env}.json`,
     JSON.stringify(
       {
         name: `wg-${env}`,
-        services: { control, worker, public: publicApi, broker },
+        services: { prepare, control, worker, public: publicApi, broker },
         networks: { control: {}, public: {}, ingest: {} },
       },
       null,
