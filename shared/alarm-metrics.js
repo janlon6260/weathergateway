@@ -1,0 +1,17 @@
+export const alarmMetrics = {
+  temperatureC: 'Temperatur (°C)',
+  humidityPct: 'Luftfuktighet (%)',
+  windSpeedMs: 'Øyeblikksvind (m/s)',
+  windMeanMs: 'Middelvind (m/s)',
+  windGustMs: 'Vindkast (m/s)',
+  rainRateMmH: 'Regnintensitet (mm/t)',
+  rainTodayMm: 'Døgnnedbør (mm)',
+  pressureHpa: 'Lufttrykk (hPa)',
+  dewPointC: 'Duggpunkt (°C)',
+  heatIndexC: 'Varmeindeks (°C)',
+  windChillC: 'Vindavkjøling (°C)',
+  solarWm2: 'Solstråling (W/m²)',
+  uvIndex: 'UV-indeks',
+  offlineSeconds: 'Sekunder uten ferske målinger',
+  qualityFlagCount: 'Antall kvalitetsavvik',
+};

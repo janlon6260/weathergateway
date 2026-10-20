@@ -19,6 +19,14 @@ test('Portainer stacks have independent literal mounts, ports and networks', () 
     assert.equal(JSON.stringify(stack.services.public).includes('ldap-password'), false);
     assert.equal(Object.hasOwn(stack.services.public.environment, 'WG_LDAP_PASSWORD'), false);
     assert.equal(Object.hasOwn(stack.services.worker.environment, 'WG_LDAP_PASSWORD'), false);
+    assert.equal(
+      Object.keys(stack.services.public.environment).some((key) => key.startsWith('WG_DB_')),
+      false,
+    );
+    assert.equal(
+      stack.services.public.volumes.some((volume) => volume.target.includes('db-ca')),
+      false,
+    );
     assert.equal(JSON.stringify(stack.services.worker).includes('client-ca.key'), false);
     assert.equal(JSON.stringify(stack).includes('/var/run/docker.sock'), false);
   }

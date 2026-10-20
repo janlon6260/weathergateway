@@ -10,11 +10,12 @@ import {
 } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, generateKeyPairSync, createPublicKey } from 'node:crypto';
 import { configuration, initialize } from '../server/bootstrap.js';
 import { Store } from '../server/store.js';
 import { syncAcl } from '../server/pki.js';
 import { publicProjection } from '../server/public-projection.js';
+import { mqttSubjectAltNames } from '../server/tls-identities.js';
 
 const environment = process.env.WG_ENVIRONMENT;
 if (!['production', 'development'].includes(environment))
@@ -34,6 +35,27 @@ function dir(path, uid = 10001) {
 }
 dir(data);
 dir(secrets);
+const firmwareSigningKey = join(secrets, 'firmware-signing.key'),
+  firmwarePublicKey = join(secrets, 'firmware-signing-public.pem');
+if (!existsSync(firmwareSigningKey) && !existsSync(firmwarePublicKey)) {
+  const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  writeFileSync(firmwareSigningKey, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), {
+    flag: 'wx',
+    mode: 0o400,
+  });
+  writeFileSync(firmwarePublicKey, pair.publicKey.export({ type: 'spki', format: 'pem' }), {
+    flag: 'wx',
+    mode: 0o640,
+  });
+} else if (existsSync(firmwareSigningKey) && !existsSync(firmwarePublicKey)) {
+  writeFileSync(
+    firmwarePublicKey,
+    createPublicKey(readFileSync(firmwareSigningKey)).export({ type: 'spki', format: 'pem' }),
+    { flag: 'wx', mode: 0o640 },
+  );
+}
+if (existsSync(firmwareSigningKey)) owner(firmwareSigningKey, 0o400);
+owner(firmwarePublicKey, 0o640);
 const caKey = join(secrets, 'client-ca.key'),
   ca = join(secrets, 'client-ca.pem');
 function command(args) {
@@ -117,10 +139,13 @@ function leaf(name, commonName, extensions) {
   owner(pem, 0o640);
 }
 const hostname = new URL(config.defaults.publicOrigin).hostname;
-if (!/^[a-z0-9.-]+$/i.test(hostname)) throw new Error('Ugyldig DNS-navn');
-leaf('server', hostname, `extendedKeyUsage=serverAuth\nsubjectAltName=DNS:${hostname},DNS:broker`);
+leaf(
+  'server',
+  hostname.replace(/^\[|\]$/g, ''),
+  `extendedKeyUsage=serverAuth\nsubjectAltName=${mqttSubjectAltNames(hostname, process.env.WG_MQTT_SERVER_NAMES || '')}`,
+);
 leaf('worker', 'gateway-worker', 'extendedKeyUsage=clientAuth');
-for (const name of ['ldap-password', 'read-token']) {
+for (const name of ['ldap-password', 'read-token', 'db-ca.pem']) {
   const path = join(secrets, name);
   if (!existsSync(path))
     writeFileSync(path, name === 'read-token' ? randomBytes(32).toString('base64url') : '', { mode: 0o640 });

@@ -6,27 +6,29 @@ Leverandøren beskriver blant annet historikk/grafer, ekstremer, klima-/nedbørs
 
 ## Funksjonsomfang
 
-| Funksjonsfamilie | Mål | Verifikasjon før den regnes som ferdig |
-| --- | --- | --- |
-| Råmålinger og ekstra sensorer | Registrere alle tilgjengelige Davis-verdier, enheter, sensorkontakt og kildetid | Dokumentert Davis-pakkeformat, ugyldighetsverdier og reelle pakkefiksturer |
-| Sanntid og historikk | Flere stasjoner, filtrering, grafer og sporbare målinger | Sortering, duplikater, sen ankomst, datatap og belastning |
-| Kalibrering og datakvalitet | Bevar råverdi; kalibrering er versjonert; feilverdier kan forklares | Sensorgrenser, sprang, fastlåste sensorer og endring av kalibrering |
-| Temperatur og fuktindekser | Duggpunkt, vindavkjøling, varmeindeks, tilsynelatende temperatur og humidex | Uavhengige referanseverdier, enheter og gyldighetsområder |
-| Trykk | Sensortrykk, stasjonstrykk, havnivåtrykk og trend som separate størrelser | Høyde-/temperaturgrunnlag, sensorens egen korreksjon og ingen dobbeltkorreksjon |
-| Vindstatistikk | Øyeblikksvind, middelvind, kast, retning, vindrose, vindrun og Beaufort | Definerte vinduer, vektet/sirkulær retning, tidsdekning og vindstille |
-| Nedbør | Intensitet, time-/døgn-/måned-/årssum, regnhendelser og tørre/våte perioder | Telleverksreset/-overløp, strømbrudd, sen ankomst og justerbar døgnstart |
-| Ekstremer og rekorder | Min/maks med tid og kilde per valgt periode | Reberegning etter korrigerte/sene data, tidszoner og manglende dekning |
-| Klima og rapporter | Døgn-, måned-, års- og NOAA-lignende klimautdata etter avklart format | Sammenligning av hele rapporter og dokumentert behandling av manglende data |
-| Sol, UV og astronomi | Tilgjengelige sensorverdier og referansebaserte avledninger | Sensor-/posisjonsgrunnlag og spesifiserte algoritmer |
-| Skybase, våttemperatur, ET og graddager | Egen beregningskatalog; bare beregn når nødvendige innganger finnes | Publisert metode, forutsetninger, referanser og toleranser per parameter |
-| Alarmer | Terskler, forsinkelse, hysterese og historikk i administrasjonen | Gjentatte/manglende målinger, tilbakegang og audit |
-| Filer og maler | Eksisterende Sunnmørsvær-filer først; øvrige WD-utdata inventariseres | Filnavn, feltnavn, datatyper, avrunding, tegnsett og atomisk utskifting |
-| Import og eksport | Sporbar innlesing av eksisterende historikk og tillatte rapportutdata | Duplikater, tidszoner og enheter; aldri blind overskriving |
-| Kamera, video, tale og øvrige lokale WD-verktøy | Avklares i totalinventaret; ikke stille utelatt fra «alt» | Eksplisitt beslutning om hver funksjonsfamilie |
-| Tredjepartsintegrasjoner | Utgående tjenester som Weather Underground er unntatt av bruker | Ingen slike tjenester aktiveres som en skjult standard |
-| Netatmo | Egen, senere datakilde | Utsatt etter brukerens avklaring |
+| Funksjonsfamilie                                | Mål                                                                             | Verifikasjon før den regnes som ferdig                                          |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Råmålinger og ekstra sensorer                   | Registrere alle tilgjengelige Davis-verdier, enheter, sensorkontakt og kildetid | Dokumentert Davis-pakkeformat, ugyldighetsverdier og reelle pakkefiksturer      |
+| Sanntid og historikk                            | Flere stasjoner, filtrering, grafer og sporbare målinger                        | Sortering, duplikater, sen ankomst, datatap og belastning                       |
+| Kalibrering og datakvalitet                     | Bevar råverdi; kalibrering er versjonert; feilverdier kan forklares             | Sensorgrenser, sprang, fastlåste sensorer og endring av kalibrering             |
+| Temperatur og fuktindekser                      | Duggpunkt, vindavkjøling, varmeindeks, tilsynelatende temperatur og humidex     | Uavhengige referanseverdier, enheter og gyldighetsområder                       |
+| Trykk                                           | Sensortrykk, stasjonstrykk, havnivåtrykk og trend som separate størrelser       | Høyde-/temperaturgrunnlag, sensorens egen korreksjon og ingen dobbeltkorreksjon |
+| Vindstatistikk                                  | Øyeblikksvind, middelvind, kast, retning, vindrose, vindrun og Beaufort         | Definerte vinduer, vektet/sirkulær retning, tidsdekning og vindstille           |
+| Nedbør                                          | Intensitet, time-/døgn-/måned-/årssum, regnhendelser og tørre/våte perioder     | Telleverksreset/-overløp, strømbrudd, sen ankomst og justerbar døgnstart        |
+| Ekstremer og rekorder                           | Min/maks med tid og kilde per valgt periode                                     | Reberegning etter korrigerte/sene data, tidszoner og manglende dekning          |
+| Klima og rapporter                              | Døgn-, måned-, års- og NOAA-lignende klimautdata etter avklart format           | Sammenligning av hele rapporter og dokumentert behandling av manglende data     |
+| Sol, UV og astronomi                            | Tilgjengelige sensorverdier og referansebaserte avledninger                     | Sensor-/posisjonsgrunnlag og spesifiserte algoritmer                            |
+| Skybase, våttemperatur, ET og graddager         | Egen beregningskatalog; bare beregn når nødvendige innganger finnes             | Publisert metode, forutsetninger, referanser og toleranser per parameter        |
+| Alarmer                                         | Terskler, forsinkelse, hysterese og historikk i administrasjonen                | Gjentatte/manglende målinger, tilbakegang og audit                              |
+| Filer og maler                                  | Eksisterende Sunnmørsvær-filer først; øvrige WD-utdata inventariseres           | Filnavn, feltnavn, datatyper, avrunding, tegnsett og atomisk utskifting         |
+| Import og eksport                               | Sporbar innlesing av eksisterende historikk og tillatte rapportutdata           | Duplikater, tidszoner og enheter; aldri blind overskriving                      |
+| Kamera, video, tale og øvrige lokale WD-verktøy | Avklares i totalinventaret; ikke stille utelatt fra «alt»                       | Eksplisitt beslutning om hver funksjonsfamilie                                  |
+| Tredjepartsintegrasjoner                        | Utgående tjenester som Weather Underground er unntatt av bruker                 | Ingen slike tjenester aktiveres som en skjult standard                          |
+| Netatmo                                         | Egen, senere datakilde                                                          | Utsatt etter brukerens avklaring                                                |
 
-Node-implementasjonen leverer nå målingsinntak, direkte ISS via RFM69HCW på 868 MHz, alternativ Davis LOOP/LOOP2, flere værindekser, dags-/timeaggregater, måneds-/årsrapporter, astronomi og kompatible utdata. Detaljene og begrensningene er i [beregningskatalogen](calculations.md). Tabellen ovenfor beskriver totalomfanget og ferdigkriteriene; den er ikke en erklæring om at alle radene er ferdige. Manglende funksjoner er listet i [leveransestatus](release-status.md).
+Node-implementasjonen leverer nå målingsinntak, direkte ISS/EU868, værindekser, tidsvektet vind/retning, vindrun/vindrose, regnvinduer/hendelser/våte og tørre perioder, graddager, FAO-56 referanse-ET, astronomi, kalibrering/kvalitetsregler, rekorder, alarmregler, grafer, rapporter, trygge maler og historikkimport. Se [metoder og datakrav](calculations.md). Referanse-ET er implementert, men blir manglende uten blant annet absolutt stasjonstrykk.
+
+De eksisterende Sunnmørsvær-filene og Socket.IO-hendelsene har egne kompatibilitetsadaptere. Egne eksportmaler er ikke en full tolk for alle WD-tagger, og klimateksten er et dokumentert Weather Gateway-format, ikke påstått identisk NOAA/WD-layout. Ekstra radio-/sensormoduler, kamera/video, tale og reléstyring er ikke implementert uten en valgt kilde og konkret kontrakt. Disse punktene og fysisk verifikasjon står fortsatt i [leveransestatus](release-status.md); hele WD-paritet skal ikke erklæres på grunnlag av lokale formeltester.
 
 ## Beregningskatalog
 

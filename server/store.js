@@ -35,6 +35,22 @@ CREATE TABLE IF NOT EXISTS certificates(id TEXT PRIMARY KEY,station_id TEXT NOT 
 CREATE TABLE IF NOT EXISTS rollups(station_id TEXT NOT NULL,period TEXT NOT NULL,metric TEXT NOT NULL,minimum REAL NOT NULL,maximum REAL NOT NULL,total REAL NOT NULL,samples INTEGER NOT NULL,min_at INTEGER NOT NULL,max_at INTEGER NOT NULL,PRIMARY KEY(station_id,period,metric));
 CREATE TABLE IF NOT EXISTS rain_state(station_id TEXT NOT NULL,day TEXT NOT NULL,last_at INTEGER NOT NULL,last_counter REAL NOT NULL,unit TEXT NOT NULL,total_mm REAL NOT NULL,resets INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(station_id,day));
 CREATE TABLE IF NOT EXISTS iss_rain(station_id TEXT PRIMARY KEY,transmitter_id INTEGER NOT NULL,last_at INTEGER NOT NULL,counter INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS weather_segments(station_id TEXT NOT NULL,start_at INTEGER NOT NULL,end_at INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,start_at));
+CREATE INDEX IF NOT EXISTS weather_segments_end ON weather_segments(station_id,end_at);
+CREATE TABLE IF NOT EXISTS weather_bins(station_id TEXT NOT NULL,hour INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,hour));
+CREATE TABLE IF NOT EXISTS firmware_releases(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,manifest TEXT NOT NULL,signature TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(station_id,manifest));
+CREATE TABLE IF NOT EXISTS telemetry_rejections(station_id TEXT NOT NULL,boot_id TEXT NOT NULL,sequence INTEGER NOT NULL,received_at INTEGER NOT NULL,reason TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,boot_id,sequence));
+CREATE TABLE IF NOT EXISTS device_status(station_id TEXT PRIMARY KEY,received_at INTEGER NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS certificate_renewals(station_id TEXT PRIMARY KEY,certificate_id TEXT NOT NULL,new_id TEXT,state TEXT NOT NULL,created_at INTEGER NOT NULL,command_id TEXT,error TEXT);
+CREATE TABLE IF NOT EXISTS alarm_state(station_id TEXT NOT NULL,rule_id TEXT NOT NULL,rule_hash TEXT NOT NULL,active INTEGER NOT NULL,pending_since INTEGER,clearing_since INTEGER,last_at INTEGER NOT NULL,value REAL,suspended INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(station_id,rule_id));
+CREATE TABLE IF NOT EXISTS alarm_events(id INTEGER PRIMARY KEY AUTOINCREMENT,station_id TEXT NOT NULL,rule_id TEXT NOT NULL,name TEXT NOT NULL,at INTEGER NOT NULL,kind TEXT NOT NULL,value REAL,acknowledged_at INTEGER,acknowledged_by TEXT);
+CREATE TABLE IF NOT EXISTS sensor_quality(station_id TEXT NOT NULL,metric TEXT NOT NULL,last_at INTEGER NOT NULL,value REAL NOT NULL,changed_at INTEGER NOT NULL,PRIMARY KEY(station_id,metric));
+CREATE TABLE IF NOT EXISTS rain_increments(station_id TEXT NOT NULL,start_at INTEGER NOT NULL,end_at INTEGER NOT NULL,amount_mm REAL NOT NULL,complete INTEGER NOT NULL,PRIMARY KEY(station_id,end_at));
+CREATE TABLE IF NOT EXISTS import_previews(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,batch_hash TEXT NOT NULL,expires_at INTEGER NOT NULL,actor TEXT NOT NULL,consumed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS deployment_acceptance(check_id TEXT PRIMARY KEY,configuration_hash TEXT NOT NULL,at INTEGER NOT NULL,actor TEXT NOT NULL,passed INTEGER NOT NULL,note TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS database_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,station_id TEXT NOT NULL,target_hash TEXT NOT NULL,observed_at INTEGER NOT NULL,row_json TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0,last_error TEXT,UNIQUE(station_id,target_hash,observed_at));
+CREATE INDEX IF NOT EXISTS database_outbox_pending ON database_outbox(station_id,target_hash,observed_at);
+CREATE TABLE IF NOT EXISTS database_delivery(station_id TEXT NOT NULL,target_hash TEXT NOT NULL,last_queued_at INTEGER NOT NULL,last_delivered_at INTEGER,last_error TEXT,PRIMARY KEY(station_id,target_hash));
 `;
 
 export class Store {
@@ -91,7 +107,8 @@ export class Store {
   }
   stationDirectory(stationId, child = 'exports') {
     id.parse(stationId);
-    if (!['exports', 'raw', 'reports', 'diagnostics'].includes(child)) throw new Error('Ugyldig mappe');
+    if (!['exports', 'raw', 'reports', 'diagnostics', 'firmware'].includes(child))
+      throw new Error('Ugyldig mappe');
     mkdirSync(this.safe('stations', stationId), { recursive: true, mode: 0o750 });
     const p = this.safe('stations', stationId, child);
     mkdirSync(p, { recursive: true, mode: child === 'exports' || child === 'reports' ? 0o750 : 0o700 });
@@ -124,10 +141,17 @@ export class Store {
     return { scope, revision: r.revision, value: JSON.parse(r.payload) };
   }
   confirmedValue(scope) {
+    return this.confirmedConfiguration(scope).value;
+  }
+  confirmedConfiguration(scope) {
     const trial = this.db
-      .prepare("SELECT before_json FROM changes WHERE scope=? AND state IN ('testing','confirming')")
+      .prepare(
+        "SELECT before_json,base_revision FROM changes WHERE scope=? AND state IN ('testing','confirming')",
+      )
       .get(scope);
-    return trial ? JSON.parse(trial.before_json) : this.current(scope).value;
+    return trial
+      ? { scope, revision: trial.base_revision, value: JSON.parse(trial.before_json) }
+      : this.current(scope);
   }
   configurations(prefix = '') {
     return this.db
@@ -235,6 +259,19 @@ export class Store {
             c.id,
           );
         this.audit(actor, 'test', { changeId, deadline });
+        if (c.scope.startsWith('firmware:')) {
+          const release = this.db
+            .prepare('SELECT * FROM firmware_releases WHERE id=? AND station_id=?')
+            .get(c.candidate.releaseId, c.candidate.stationId);
+          if (!release) fail('Firmwareutgivelsen finnes ikke', 404);
+          this.queueCommand(
+            c.candidate.stationId,
+            'test_firmware',
+            { releaseId: release.id, manifest: JSON.parse(release.manifest), signature: release.signature },
+            deadline,
+            c.id,
+          );
+        }
         return this.getChange(changeId);
       })
       .immediate();
@@ -259,7 +296,18 @@ export class Store {
           fail('Endringen må ha en fersk, vellykket helsesjekk');
         if (c.scope.startsWith('device:') && (!c.health.deviceAck || !c.health.deviceTelemetry))
           fail('Enheten må kvittere og sende gyldige målinger med testinnstillingene');
-        if (c.scope.startsWith('device:')) {
+        if (c.scope.startsWith('firmware:') && (!c.health.firmwareAck || !c.health.firmwareTelemetry))
+          fail('Den nye firmwaren må kvittere og sende gyldige sensormålinger');
+        if (c.scope.startsWith('firmware:')) {
+          this.queueCommand(
+            c.candidate.stationId,
+            'commit_firmware',
+            { releaseId: c.candidate.releaseId },
+            c.deadline,
+            c.id,
+          );
+          this.db.prepare("UPDATE changes SET state='confirming' WHERE id=?").run(c.id);
+        } else if (c.scope.startsWith('device:')) {
           this.queueCommand(
             c.scope.slice(7),
             'commit_config',
@@ -270,6 +318,8 @@ export class Store {
           this.db.prepare("UPDATE changes SET state='confirming' WHERE id=?").run(c.id);
         } else this.db.prepare("UPDATE changes SET state='confirmed' WHERE id=?").run(c.id);
         this.audit(actor, 'confirm', { changeId });
+        if (c.scope.startsWith('station:'))
+          this.db.prepare('DELETE FROM sensor_quality WHERE station_id=?').run(c.candidate.id);
         return this.getChange(changeId);
       })
       .immediate();
@@ -292,10 +342,18 @@ export class Store {
               c.id,
             );
         }
+        if (c.scope.startsWith('firmware:') && c.state !== 'draft')
+          this.queueCommand(
+            c.candidate.stationId,
+            'rollback_firmware',
+            { releaseId: c.candidate.releaseId },
+            this.clock() + 300000,
+            c.id,
+          );
         this.db.prepare("UPDATE changes SET state='rolled_back',reason=? WHERE id=?").run(reason, c.id);
         this.db
           .prepare(
-            "UPDATE commands SET state='cancelled' WHERE change_id=? AND kind!='rollback_config' AND state IN ('queued','sent','received','testing')",
+            "UPDATE commands SET state='cancelled' WHERE change_id=? AND kind NOT IN ('rollback_config','rollback_firmware') AND state IN ('queued','sent','received','testing')",
           )
           .run(c.id);
         this.audit(actor, 'rollback', { changeId, reason });

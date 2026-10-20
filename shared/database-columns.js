@@ -1,0 +1,50 @@
+export const databaseColumns = {
+  temperatureC: 'temperature',
+  humidityPct: 'outdoor_humidity',
+  pressureHpa: 'barometer',
+  rainRateMmH: 'rain_rate',
+  rainTodayMm: 'daily_rainfall',
+  windMeanMs: 'average_windspeed',
+  windGustMs: 'gust_windspeed',
+  windDirectionDeg: 'wind_direction',
+  temperatureMaxC: 'max_daily_temperature',
+  windGustMaxMs: 'max_gust_current_day',
+};
+export const extendedDatabaseColumns = {
+  rainMonthMm: 'monthly_rainfall',
+  rainYearMm: 'yearly_rainfall',
+  rainYesterdayMm: 'yesterday_rainfall',
+  rainRateMaxMmH: 'max_rain_rate_curent_day',
+  windChillC: 'current_windchill',
+  humidexC: 'current_humidex',
+  temperatureMinC: 'min_daily_temperature',
+  pressureTrendLastHourHpa: 'barometer_trend_last_hour',
+  dewPointC: 'dew_point_temperature',
+  cloudBaseEstimateM: 'cloud_height',
+  humidexMaxC: 'max_humidex',
+  humidexMinC: 'min_humidex',
+  windChillMaxC: 'max_windchill',
+  windChillMinC: 'min_windchill',
+  heatIndexMaxC: 'max_heat_index',
+  heatIndexMinC: 'min_heat_index',
+  heatIndexC: 'heat_index',
+  windMeanMaxMs: 'max_average_windspeed_day',
+};
+export const vatneDatabaseColumns = {
+  soilTemperatureC: 'soil_temperature',
+  forecastIcon: 'forecast_icon',
+  solarWm2: 'actual_solar_reading',
+  localHour: 'hour',
+  localMinute: 'minute',
+  localSecond: 'second',
+  localDay: 'day',
+  localMonth: 'month',
+};
+export const optionalDatabaseMetrics = { ...extendedDatabaseColumns, ...vatneDatabaseColumns };
+export const calendarDatabaseMetrics = new Set([
+  'localHour',
+  'localMinute',
+  'localSecond',
+  'localDay',
+  'localMonth',
+]);

@@ -6,6 +6,12 @@ import { derived, algorithmVersion } from './meteo.js';
 import { Rejected } from './store.js';
 import { decodeLoop } from './davis.js';
 import { assembleIss, accumulateIssRain, freshIssMeasurements, rainCoverageComplete } from './davis-iss.js';
+import { queueDatabaseObservation } from './database-queue.js';
+import { addTemporalObservation, rollingWind, climateDay } from './weather-analytics.js';
+import { currentSolarMaximum } from './astronomy.js';
+import { calibrate, assessQuality } from './data-quality.js';
+import { renderTemplate } from './reports.js';
+import { recordRainIncrement, rainWindow, rainStatistics } from './rain-statistics.js';
 
 const fields = {
   temperatureC: 'temp',
@@ -40,7 +46,6 @@ const statsCache = new WeakMap();
 function addRollups(store, stationId, body, observed, rainClicks) {
   if (!body.sensorContact) return;
   const day = DateTime.fromMillis(observed, { zone: 'Europe/Oslo' }).toISODate();
-  if (body.source?.protocol === 'davis-iss') accumulateIssRain(store, stationId, body, observed, day);
   const increment = store.db
     .prepare(`INSERT INTO rollups VALUES (?,?,?,?,?,?,1,?,?) ON CONFLICT(station_id,period,metric) DO UPDATE SET
     min_at=CASE WHEN excluded.minimum<minimum OR (excluded.minimum=minimum AND excluded.min_at<min_at) THEN excluded.min_at ELSE min_at END,
@@ -64,7 +69,7 @@ function addRollups(store, stationId, body, observed, rainClicks) {
     const prior = store.db
       .prepare('SELECT * FROM rain_state WHERE station_id=? AND day=?')
       .get(stationId, day);
-    const scale = unit === 'clicks' ? store.current(`station:${stationId}`).value.rainCounterMmPerUnit : 1;
+    const scale = unit === 'clicks' ? store.confirmedValue(`station:${stationId}`).rainCounterMmPerUnit : 1;
     if (!prior)
       store.db
         .prepare('INSERT INTO rain_state VALUES (?,?,?,?,?,?,0)')
@@ -91,44 +96,104 @@ export function dayRange(date, zone = 'Europe/Oslo') {
   if (!start.isValid || start.toISODate() !== date) throw new Rejected('Ugyldig dato', 400);
   return [start.toMillis(), start.plus({ days: 1 }).toMillis()];
 }
-export function ingest(store, identity, input) {
+export function ingest(store, identity, input, { enqueueDatabase = true, historical = false } = {}) {
   const message = telemetrySchema.parse(input);
   if (identity !== message.stationId) throw new Rejected('Stasjonsidentiteten stemmer ikke', 403);
-  const station = store.current(`station:${identity}`).value;
+  const stationRecord = store.confirmedConfiguration(`station:${identity}`),
+    station = stationRecord.value;
   if (!station.enabled || station.model === 'Netatmo')
     throw new Rejected('Stasjonen mottar ikke ESP-data', 403);
   const observed = Date.parse(message.observedAt),
     now = store.clock(),
     settings = store.current('gateway').value;
-  if (observed > now + 60000 || observed < now - settings.retentionDays * 86400000)
+  if (
+    observed > now + 60000 ||
+    observed < (historical ? Date.UTC(1900, 0, 1) : now - settings.retentionDays * 86400000)
+  )
     throw new Rejected('Måletid er utenfor tillatt tidsrom', 422);
   let rainClicks;
-  if (message.source?.protocol === 'davis-iss') {
-    assembleIss(store, message, station);
-  } else if (message.source) {
-    const decoded = decodeLoop(Buffer.from(message.source.packet, 'base64'), station.rainCounterMmPerUnit);
-    message.measurements = decoded.measurements;
-    message.sensorContact = message.sensorContact && decoded.sensorContact;
-    rainClicks = decoded.rawFields.rainTodayClicks;
+  try {
+    if (message.source?.protocol === 'davis-iss') {
+      assembleIss(store, message, station);
+    } else if (message.source) {
+      const decoded = decodeLoop(Buffer.from(message.source.packet, 'base64'), station.rainCounterMmPerUnit);
+      message.measurements = decoded.measurements;
+      message.sensorContact = message.sensorContact && decoded.sensorContact;
+      rainClicks = decoded.rawFields.rainTodayClicks;
+    }
+  } catch (error) {
+    if (String(error.code || '').startsWith('SQLITE_')) throw error;
+    throw new Rejected('Ugyldig Davis-pakke eller senderidentitet', 422);
   }
   const body = {
     ...message,
     derived: message.sensorContact ? derived(message.measurements) : {},
     algorithmVersion,
-    calibrationRevision: store.current(`station:${identity}`).revision,
+    calibrationRevision: historical ? 0 : stationRecord.revision,
     receivedAt: new Date(now).toISOString(),
   };
+  if (historical) {
+    body.rawMeasurements = { ...body.measurements };
+    body.quality = { flags: [] };
+    body.imported = { calibration: 'source-values', qualityRules: 'not-reapplied' };
+  } else calibrate(station, body);
+  body.derived = body.sensorContact ? derived(body.measurements) : {};
   const inserted = store.db
     .transaction(() => {
+      if (
+        store.db
+          .prepare('SELECT 1 FROM observations WHERE station_id=? AND boot_id=? AND sequence=?')
+          .get(identity, message.bootId, message.sequence)
+      )
+        return 0;
+      if (!historical) assessQuality(store, station, body);
+      body.derived = body.sensorContact ? derived(body.measurements) : {};
       const result = store.db
         .prepare('INSERT OR IGNORE INTO observations VALUES (?,?,?,?,?,?)')
         .run(identity, message.bootId, message.sequence, observed, now, JSON.stringify(body));
       if (result.changes) {
-        addRollups(store, identity, body, observed, rainClicks);
-        if (body.quality)
+        if (body.sensorContact)
           store.db
-            .prepare('UPDATE observations SET body=? WHERE station_id=? AND boot_id=? AND sequence=?')
-            .run(JSON.stringify(body), identity, message.bootId, message.sequence);
+            .prepare(
+              'INSERT INTO meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(CAST(meta.value AS INTEGER),CAST(excluded.value AS INTEGER)) AS TEXT)',
+            )
+            .run(`last_valid_sensor:${identity}`, String(observed));
+        addTemporalObservation(store, station, body);
+        if (body.iss) {
+          body.windStatistics = rollingWind(store, station, observed);
+          body.measurements.windMeanMs = body.windStatistics.meanMs;
+          body.measurementTimes.windMeanMs = body.observedAt;
+          body.freshFields.push('windMeanMs');
+        }
+        const beforeRain = store.db
+          .prepare('SELECT * FROM rain_state WHERE station_id=? ORDER BY last_at DESC LIMIT 1')
+          .get(identity);
+        if (body.iss) {
+          accumulateIssRain(
+            store,
+            identity,
+            body,
+            observed,
+            DateTime.fromMillis(observed, { zone: 'Europe/Oslo' }).toISODate(),
+          );
+          recordRainIncrement(store, station, body, beforeRain);
+          const rainAt = store.db
+            .prepare('SELECT MAX(end_at) AS at FROM rain_increments WHERE station_id=? AND end_at<=?')
+            .get(identity, observed).at;
+          if (rainAt) {
+            body.rainWindows = {
+              lastHour: rainWindow(store, identity, rainAt - 3600000, rainAt),
+              last24Hours: rainWindow(store, identity, rainAt - 86400000, rainAt),
+            };
+            body.measurements.rainLastHourMm = body.rainWindows.lastHour.totalMm;
+          }
+        }
+        addRollups(store, identity, body, observed, rainClicks);
+        if (!body.iss) recordRainIncrement(store, station, body, beforeRain);
+        store.db
+          .prepare('UPDATE observations SET body=? WHERE station_id=? AND boot_id=? AND sequence=?')
+          .run(JSON.stringify(body), identity, message.bootId, message.sequence);
+        if (enqueueDatabase) queueDatabaseObservation(store, station, body);
       }
       return result.changes;
     })
@@ -209,6 +274,7 @@ export function legacy(store, station, message = latest(store, station.id)) {
     age = store.clock() - time.toMillis(),
     m = message.iss ? freshIssMeasurements(message, store.clock()) : message.measurements,
     stats = dailyStatistics(store, station.id);
+  const wind = rollingWind(store, station, store.clock());
   const result = {
     ...emptyLegacy,
     WindRoseData: [],
@@ -239,6 +305,21 @@ export function legacy(store, station, message = latest(store, station.id)) {
       m[field],
       ['humidityPct', 'indoorHumidityPct', 'windDirectionDeg'].includes(field) ? 0 : 1,
     );
+  if (message.iss) result.wspeed = format(wind.meanMs);
+  result.avgbearing = format(wind.directionDeg, 0);
+  const climate = climateDay(store, station, time.setZone('Europe/Oslo').toISODate());
+  if (climate.windRose.some((bin) => bin.percent !== null)) {
+    result.WindRoseData = climate.windRose.map((bin) => bin.percent);
+  }
+  result.windrun = format(climate.windRunKm);
+  result.windCoverage = wind.coverage;
+  result.windWindowSeconds = wind.windowSeconds;
+  result.gust3SecondsMs = format(wind.gustMs);
+  result.CurrentSolarMax = format(currentSolarMaximum(station, time.toMillis()), 0);
+  const rainAt = store.db
+    .prepare('SELECT MAX(end_at) AS at FROM rain_increments WHERE station_id=? AND amount_mm>0')
+    .get(station.id).at;
+  result.LastRainTipISO = rainAt ? new Date(rainAt).toISOString() : '';
   const derivedNow = message.iss ? (message.sensorContact ? derived(m) : {}) : message.derived;
   for (const [field, output] of Object.entries(derivedFields))
     result[output] = format(derivedNow?.[field], field === 'beaufort' ? 0 : 1);
@@ -300,6 +381,7 @@ export function snapshot(store) {
   return Object.fromEntries(
     store
       .stationList()
+      .map((s) => store.confirmedConfiguration(s.scope))
       .filter((s) => s.value.enabled && s.value.model !== 'Netatmo')
       .map((s) => [s.value.key, legacy(store, s.value)]),
   );
@@ -319,6 +401,22 @@ export function exportStation(store, station) {
     closeSync(fd);
   }
   renameSync(temporary, target);
+  for (const template of station.templates || []) {
+    const path = join(directory, template.name),
+      text = renderTemplate(
+        template.content,
+        { station, weather: data },
+        { html: template.name.endsWith('.html') },
+      );
+    const file = openSync(`${path}.tmp`, 'w', 0o640);
+    try {
+      writeFileSync(file, text);
+      fsyncSync(file);
+    } finally {
+      closeSync(file);
+    }
+    renameSync(`${path}.tmp`, path);
+  }
   return target;
 }
 export function history(store, stationId, date) {
@@ -385,5 +483,32 @@ export function periodReport(store, stationId, period) {
     days[r.day].rainfallComplete = complete;
     days[r.day].counterResets = r.resets;
   }
-  return { stationId, period, timezone: 'Europe/Oslo', algorithmVersion, days };
+  const station = store.confirmedValue(`station:${stationId}`);
+  for (let date = start; date < end; date = date.plus({ days: 1 })) days[date.toISODate()] ||= {};
+  for (const [date, day] of Object.entries(days)) day.climate = climateDay(store, station, date);
+  const completeRain = Object.values(days).filter((day) => day.rainfallComplete);
+  const completeClimate = Object.values(days).filter((day) => day.climate?.complete);
+  const sum = (key) => {
+    const values = completeClimate.map((d) => d.climate[key]).filter((v) => typeof v === 'number');
+    return values.length
+      ? { value: values.reduce((a, b) => a + b, 0), days: values.length }
+      : { value: null, days: 0 };
+  };
+  return {
+    stationId,
+    period,
+    timezone: 'Europe/Oslo',
+    algorithmVersion,
+    days,
+    rainAnalysis: rainStatistics(store, station, start.toISODate(), end.minus({ days: 1 }).toISODate()),
+    totals: {
+      rainObservedMm: rain.length ? rain.reduce((n, d) => n + d.total_mm, 0) : null,
+      rainCompleteMm: completeRain.length ? completeRain.reduce((n, d) => n + d.rainfallMm, 0) : null,
+      rainCompleteDays: completeRain.length,
+      heatingDegreeDays: sum('heatingDegreeDays'),
+      coolingDegreeDays: sum('coolingDegreeDays'),
+      growingDegreeDays: sum('growingDegreeDays'),
+      referenceEtMm: sum('referenceEtMm'),
+    },
+  };
 }

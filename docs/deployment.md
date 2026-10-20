@@ -24,10 +24,10 @@ Prosjektet bruker ett eget image: `janlon6260/weathergateway`. Express serverer 
 
 GitHub-jobben bruker environment **`prod`**, DockerHub-bruker **`janlon6260`** og environment-secret **`DOCKERHUB_TOKEN`**. Tokenet må gi skrivetilgang til `janlon6260/weathergateway`. Det brukes bare ved DockerHub-innlogging, ikke som build-argument. Ingen ekstra secret for brukernavn kreves. Environment-secrets er tilgjengelige for jobber som peker på det aktuelle miljøet. [GitHubs dokumentasjon](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
 
-| Utløser | DockerHub-tagger |
-| --- | --- |
-| Push til `main` | `latest`, `main`, `sha-<full commit-SHA>` |
-| Versjonstagg, for eksempel `v1.2.3` | `1.2.3`, `1.2`, `sha-<full commit-SHA>` |
+| Utløser                                                       | DockerHub-tagger                                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Push til `main`                                               | `latest`, `main`, `sha-<full commit-SHA>`                           |
+| Versjonstagg, for eksempel `v1.2.3`                           | `1.2.3`, `1.2`, `sha-<full commit-SHA>`                             |
 | Manuelt via **Actions → Publish Docker image → Run workflow** | Tagger for valgt branch/versjon og commit; `latest` bare for `main` |
 
 Imaget bygges for `linux/amd64` og `linux/arm64`. Docker-actions er låst til konkrete commit-SHA-er. Oppsettet følger [Dockers veiledning for bygg og publisering](https://docs.docker.com/build/ci/github-actions/push-multi-registries/) og [metadata/tagger](https://docs.docker.com/build/ci/github-actions/manage-tags-labels/). Kjøringen publiserer bare til DockerHub og laster ikke opp build-record-artifakter til GitHub.
@@ -51,22 +51,26 @@ docker run --rm --user 0:0 --env-file .env \
   janlon6260/weathergateway:latest node scripts/bootstrap-host.js
 ```
 
-Dette oppretter miljømarkør, database, offentlig værdatakopi, brokerkonfigurasjon/ACL, separat CA og server-/arbeidersertifikater. Eksisterende nøkler overskrives ikke; gjentatt bootstrap fornyer dem ikke. En ufullstendig nøkkel/sertifikatkombinasjon avbryter oppsettet.
+Dette oppretter miljømarkør, database, offentlig værdatakopi, brokerkonfigurasjon/ACL, separat CA, server-/arbeidersertifikater og ECDSA-signaturnøkkel for OTA. Eksisterende nøkler overskrives ikke; gjentatt bootstrap fornyer dem ikke. En ufullstendig nøkkel/sertifikatkombinasjon avbryter oppsettet. Ved IP-tilkobling må brokerens adresser settes i `WG_MQTT_SERVER_NAMES` ved sertifikatutstedelse, slik at de kommer med som IP-SAN.
 
 Legg følgende filer under `/data/req/weathergateway/secrets/<miljø>`:
 
-| Fil | Innhold |
-| --- | --- |
-| `ldap-password` | Alternativ til `WG_LDAP_PASSWORD`; bootstrap lager en tom fil som kan stå tom ved direkte passord. |
-| `ad-ca.pem` | Organisasjonens CA-kjede for domenekontrollerne i PEM. Dere tilfører denne. |
-| `read-token` | Tilfeldig generert lesetoken for Sunnmørsværs backend. |
-| `client-ca.key` / `.pem` | Miljøets PKI; privat CA-nøkkel monteres bare i kontrolltjenesten. |
-| `server.key` / `.pem` | Brokerens TLS-identitet med offentlig MQTT-navn og `broker` i SAN. |
-| `worker.key` / `.pem` | MQTT-arbeiderens klientidentitet. |
+| Fil                      | Innhold                                                                                            |
+| ------------------------ | -------------------------------------------------------------------------------------------------- |
+| `ldap-password`          | Alternativ til `WG_LDAP_PASSWORD`; bootstrap lager en tom fil som kan stå tom ved direkte passord. |
+| `ad-ca.pem`              | Organisasjonens CA-kjede for domenekontrollerne i PEM. Dere tilfører denne.                        |
+| `read-token`             | Tilfeldig generert lesetoken for Sunnmørsværs backend.                                             |
+| `client-ca.key` / `.pem` | Miljøets PKI; privat CA-nøkkel monteres bare i kontrolltjenesten.                                  |
+| `server.key` / `.pem`    | Brokerens TLS-identitet med offentlig MQTT-navn og `broker` i SAN.                                 |
+| `worker.key` / `.pem`    | MQTT-arbeiderens klientidentitet.                                                                  |
 
 AD-bindpassordet kan settes i `.env` eller Portainers miljøvariabler som beskrevet over. Private nøkler og øvrige hemmeligheter monteres som filer. `.env` er utelatt fra både Git og Docker-byggkonteksten. Normal UID er 10001/GID 10001; offentlig API har UID 10002/GID 10001, broker UID 1883/GID 10001. CA- og arbeidernøkler er 0400; brokerens servernøkkel er 0440 for felles GID. AD-filene skal bare kunne leses av nødvendig tjenestebruker.
 
 ## Stack og nettverk
+
+For ekstern værdatabaseskriving: sett `WG_DB_ALLOWED_DATABASES` og `WG_DB_PASSWORD` separat per miljø, og konfigurer stasjonene under **Databaser**. Kjør bootstrap på nytt ved oppgradering for å opprette `db-ca.pem`; fyll den med privat database-CA eller la den stå tom for standard CA-er. Bare control og worker får databaselegitimasjon og CA-filen. Se [databaseveiledningen](weather-database.md) for skjema, TLS, kø og samordnet overgang fra eksisterende skriving.
+
+Gatewayen og SQL-serveren står på samme private nett. Sett `WG_DB_LAN_ENDPOINTS` til de eksakte private vert:port-målene og velg **Privat lokalnett (uten TLS)** per stasjon; dette er standard for nye koblinger. Verdien videresendes bare til control og worker. Denne forbindelsen krever verken TLS eller VPN. TLS med sertifikatkontroll kan velges dersom databaseserveren tilbyr det.
 
 Opprett én stack per miljø med `deploy/compose.development.json` og `deploy/compose.production.json`. JSON er gyldig Compose/YAML. Angi variablene fra riktig miljøfil. Datastier, miljø og hemmelighetsmapper er forskjellige, bokstavelige verdier i stackene.
 
@@ -84,11 +88,11 @@ Logg inn med en AD-konto i konfigurert administratorgruppe. Kontroller Skodje, H
 
 Utsted en unik enhetspakke under Enheter og følg `firmware/README.md`. Privatnøkkelen leveres én gang og lagres ikke i databasen. Utviklings- og produksjonssertifikater er ikke ombyttbare.
 
-Enhetssertifikater varer 90 dager; bootstrap-server/arbeider 365 dager; CA ti år. Panelet varsler om registrerte enhetssertifikater som utløper innen 14 dager. Fjernfornyelse er ikke implementert og må løses før ubemannet langtidsdrift.
+Enhetssertifikater varer 90 dager og fjernfornyes automatisk når mindre enn 21 dager gjenstår. Server/arbeider varer 365 dager; CA ti år. Kontroller og forny hostsertifikater med `scripts/renew-host-certificates.js`, og opprett berørte containere på nytt etter utskifting av filmonteringer. Se [OTA og sertifikatvedlikehold](firmware-lifecycle.md).
 
 ## Sikkerhetskopi og restore
 
-Panelet lager konsistente databasekopier i `<miljø>/system/backups` med miljø, status, tidspunkt og SHA-256. Databasen inneholder også rårammene. Nøkler, JSONL og øvrige filer må inngå i separat, beskyttet hostbackup. Automatisk backupplan og ekstern backup er ikke satt opp.
+Control lager konsistente databasekopier i `<miljø>/system/backups` med miljø, status, tidspunkt og SHA-256. Standard automatisk intervall er 24 timer, og de 30 siste fullførte kopiene beholdes. Begge innstillinger styres i panelet med test/bekreftelse; intervall 0 deaktiverer planen. Mislykkede forsøk gjentas tidligst etter én time. Databasen inneholder også rårammene. Nøkler, firmwarebilder, JSONL og øvrige filer må inngå i separat, beskyttet hostbackup. Ekstern/offsite backup må settes opp på verten.
 
 Prøv gjenoppretting på en isolert kopi først. Ved reell restore: stopp alle fire tjenester, behold diskbackup og bruk UUID fra backuplisten:
 

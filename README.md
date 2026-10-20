@@ -2,9 +2,9 @@
 
 Node.js 24, Express 5 og React. Gateway for fire Davis-stasjoner med ESP-WROOM-32, kryptert MQTT, intern AD-administrasjon og kompatible data til Sunnmørsvær. Python brukes ikke i serveren.
 
-Implementert: React-panel med sanntidsliste, stasjons- og enhetsadministrasjon, LDAPS og eksisterende AD-grupper, vedvarende test/bekreftelse/tilbakerulling, lokal tilbakeføring i ESP32-koden, sertifikatutstedelse og sperring, MQTT-inntak, direkte Davis ISS-mottak via RFM69HCW på 868 MHz, alternativ LOOP/LOOP2-dekoding, værindekser, historikk, døgn-/måneds-/årsaggregater, Socket.IO, fileksport, sikkerhetskopier og separate Docker/Portainer-stacker.
+Implementert: React-panel med sanntidsliste, LDAPS/roller, stasjons-/enhetsadministrasjon, test/bekreftelse/tilbakeføring, direkte Davis ISS/EU868, tidsvektet vind, vær-/klimaberegninger, rekorder, kalibrering, kvalitetsregler, alarmer, grafer, historikkimport, fil-/Socket.IO-kompatibilitet og SQL-kø til eksisterende databaser. ESP32 har varig sendekø, signert OTA og fjernfornyelse av klientsertifikat. Separate Docker/Portainer-stakker har automatisk databasebackup og produksjonskontroller.
 
-**Dette er ennå ikke godkjent for produksjon eller en fullstendig Weather Display-erstatning.** De konkrete funksjonshullene og verifikasjonskravene står i [leveransestatus](docs/release-status.md). AD-, Docker- og maskinvareverdier kan fylles inn senere. Manglende AD-oppsett gir ingen innlogging.
+**Implementasjonen er lokalt verifisert; produksjonsinstallasjon og fysisk maskinvare er ikke godkjent her.** Se [leveransestatus](docs/release-status.md) og [akseptanseprøvene](docs/production-acceptance.md). Identisk oppførsel for alle Weather Display-funksjoner må ikke antas. Manglende trykk gir manglende trykkavhengige beregninger, inkludert referanse-ET.
 
 ## Lokal utvikling
 
@@ -20,16 +20,18 @@ Kopier [miljøeksemplet](.env.example) til `.env`, fyll inn LDAPS-verdiene og st
 
 `.env` ligger i prosjektroten sammen med `package.json`. AD-bindpassordet kan skrives direkte som `WG_LDAP_PASSWORD='ditt_passord'`; en ikke-tom verdi har prioritet over `WG_LDAP_PASSWORD_FILE`. Start backend på nytt etter endringen.
 
+Ekstern databaseskriving konfigureres under **Databaser** i adminpanelet, med passord og tillatte databasenavn i `.env`. Worker sender til eksisterende `wx_data` via en vedvarende kø. Se [databaseoppsett, feltkoblinger og overgang](docs/weather-database.md). Tilkoblingene er deaktivert som standard; utvikling kan bare bruke separate `wg_dev_`-databaser.
+
 ## Docker og Portainer
 
 [Driftsveiledningen](docs/deployment.md) beskriver bygg, `.env`, hemmelighetsfiler, klargjøring av disken, Portainer, sikkerhetskopi og gjenoppretting. Apache2-konfigurasjonen utføres senere, som avtalt.
 
 [DockerHub-workflowen](.github/workflows/dockerhub.yml) bygger og publiserer **`janlon6260/weathergateway`** ved push til `main`, versjonstagger `v*.*.*` eller manuell kjøring. Den bruker GitHub-environment `prod` og secret `DOCKERHUB_TOKEN`. Workflow og Dockerfile kjører ingen tester. React og Express inngår i samme image, som gjenbrukes av de tre applikasjonstjenestene; Mosquitto har eget offisielt image.
 
-| Miljø | Data på host | Intern adminport | Lokal API-port | MQTT/TLS |
-| --- | --- | --- | --- | --- |
-| Produksjon | `/data/req/weathergateway/production` | privat IP:18081 | 127.0.0.1:18080 | 8883 |
-| Utvikling | `/data/req/weathergateway/development` | privat IP:18091 | 127.0.0.1:18090 | 8884 |
+| Miljø      | Data på host                           | Intern adminport | Lokal API-port  | MQTT/TLS |
+| ---------- | -------------------------------------- | ---------------- | --------------- | -------- |
+| Produksjon | `/data/req/weathergateway/production`  | privat IP:18081  | 127.0.0.1:18080 | 8883     |
+| Utvikling  | `/data/req/weathergateway/development` | privat IP:18091  | 127.0.0.1:18090 | 8884     |
 
 Hemmeligheter ligger under `/data/req/weathergateway/secrets/<miljø>`. Hver stasjon har `stations/<UUID>/raw`, `exports` og `reports`. Den offentlige tjenesten får bare en separat lesekopi av værdata; den får ikke kontrollbasen, AD-verdiene eller nøkler for enheter/CA.
 
@@ -40,5 +42,6 @@ Miljøknappen åpner den andre, selvstendige installasjonen. Utviklingsendringer
 - [Arkitektur](docs/architecture.md), [sikkerhet](docs/security.md) og [MQTT/ESP32](docs/device-protocol.md).
 - [Beregninger og kilder](docs/calculations.md), [Sunnmørsvær-kontrakt](docs/sunnmorsver-compatibility.md) og [Weather Display-matrisen](docs/weather-display-scope.md).
 - [Firmwarebygg](firmware/README.md), [ISS-radio og koblingstabell](docs/davis-radio.md), [leveransestatus og testgrenser](docs/release-status.md).
+- [Signert OTA og sertifikatvedlikehold](docs/firmware-lifecycle.md), [produksjonsakseptanse](docs/production-acceptance.md).
 
 Sunnmørsvær-prosjektet er lest lokalt og ikke endret. Den delte ChatGPT-lenken ga ikke tilgang til samtaleinnholdet.

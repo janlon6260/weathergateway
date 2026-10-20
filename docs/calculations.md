@@ -1,35 +1,42 @@
 # Beregninger og sporbarhet
 
-Alle interne hastigheter er m/s, temperaturer °C, trykk hPa og regn mm. Avrunding skjer ved eksport/presentasjon. Manglende og ugyldige innganger gir `null` internt og tom streng i legacy-filene; de blir aldri nullmålinger. Metodeversjonen er `wg-meteo-2`. Tallfestede eksempler finnes i `test/meteo.test.js` og `test/compatibility.test.js`.
+Interne enheter er m/s, °C, hPa, mm og W/m². Avrunding skjer ved presentasjon/eksport. Ugyldige eller manglende innganger blir `null`, tom streng i legacy-filer og SQL `NULL`; de blir ikke tallet 0. Metodeversjoner er `wg-meteo-2`, `wg-iss-1` og `wg-climate-1`.
 
-| Størrelse | Implementert metode og begrensning |
-| --- | --- |
-| Duggpunkt | PsychroLib 2.5.0 / ASHRAE 2017, temperatur og RH. RH=0 gir ingen verdi. |
-| Våttemperatur | PsychroLib iterativ ASHRAE-metode med temperatur, RH og **absolutt stasjonstrykk**. Manglende stasjonstrykk erstattes ikke med havnivåtrykk. |
-| Vindavkjøling | NWS, temperatur ≤10 °C og vind >1,34 m/s. Vind konverteres til km/h i formelen. |
-| Varmeindeks | NWS/Rothfusz med innledende gyldighetskontroll og korreksjon for lav/høy RH. |
-| Opplevd temperatur | BOM-formelen uten strålingsledd: T + 0,33e − 0,70v − 4. |
-| Humidex | ECCC-metode basert på duggpunkt; vises for temperatur ≥20 °C. |
-| Beaufort | Terskeltabell for hastighet i m/s. |
-| Retningsmiddel | Hastighetsvektet sirkulær vektormetode som hjelpefunksjon. Ingen retning for vindstille eller kansellerende vektorer. |
-| Skybase | Enkel estimatverdi 125 × (T−Td), meter over bakken. Ikke målt skyhøyde. |
-| Ekstremer og middel | Inkrementelle min/maks med kildetid, aritmetiske observasjonsmidler per UTC-time og lokalt døgn. Ingen interpolasjon av datagap. |
-| Regn | Davis-tellere med stasjonens mm per vipp. Døgnsum bevarer allerede registrert regn ved tellerreset og kalibreringsendring. Senere tellerøkning bruker gjeldende kalibrering. |
-| Trend | Sunnmørsværs terskler; trykk bruker tre timers lineær regresjon med minst seks punkter og 2,75 timers dekning. |
-| Astronomi | Astronomy Engine 2.1.19: sol-/måneoppgang og -nedgang, borgerlig skumring, månefase og belyst andel. Manglende opp-/nedgang ved polarforhold gir null. Terrenghorisont inngår ikke. |
+| Størrelse          | Metode og forutsetninger                                                                                                                                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Duggpunkt          | PsychroLib 2.5.0 / ASHRAE 2017. Temperatur og RH; RH=0 gir manglende verdi.                                                                                                                                                                                     |
+| Våttemperatur      | PsychroLibs iterative ASHRAE-metode, med absolutt stasjonstrykk. Havnivåtrykk brukes ikke som erstatning.                                                                                                                                                       |
+| Vindavkjøling      | NWS, temperatur ≤10 °C og vind >1,34 m/s, med km/h i ligningen.                                                                                                                                                                                                 |
+| Varmeindeks        | NWS/Rothfusz, gyldighetskontroll og korreksjon for lav/høy RH.                                                                                                                                                                                                  |
+| Opplevd temperatur | BOM-formel uten strålingsledd: T + 0,33e − 0,70v − 4.                                                                                                                                                                                                           |
+| Humidex            | ECCC-metode basert på duggpunkt, visning ved temperatur ≥20 °C.                                                                                                                                                                                                 |
+| Beaufort           | Dokumenterte hastighetsterskler i m/s.                                                                                                                                                                                                                          |
+| Skybase            | Estimat 125 × (T−Td), meter over bakken; ingen måling av skyhøyde.                                                                                                                                                                                              |
+| Middelvind         | Stykkevis konstant tidsintegrasjon, som standard 600 sekunder, maksimalt 15 sekunders gap og minst 90 % datadekning. Vinduer og grenser styres per stasjon.                                                                                                     |
+| Vindretning        | Tids- og hastighetsvektet vektor; ingen retning ved vindstille eller kansellerende vektorer.                                                                                                                                                                    |
+| Vindkast           | Mottatt ISS-kast og separat beregnet tresekunders middel fra tilgjengelige ISS-prøver. Prøvetakten begrenser hva som kan måles; dette er ikke en WMO-sertifisert kastmåling.                                                                                    |
+| Vindrun/vindrose   | Tidsintegrert hastighet i km; 16 sektorer med tidsandeler og egen vindstilleandel (<0,3 m/s). Manglende observasjoner fylles ikke inn.                                                                                                                          |
+| Regn               | Vedvarende Davis-tellere med konfigurert mm/vipp, overløps-/resetkontroll og eksplisitt ufullstendig døgn ved tvetydige ISS-gap.                                                                                                                                |
+| Regnperioder       | Time/24 timer og justerbar rapportdøgnstart i Oslo-tid. Ingen fordeling av regn over tvetydige vindusgrenser. Måneds-/årssum krever komplette kjente døgn; våte/tørre perioder brytes av manglende avsluttede døgn. Regnhendelser bruker seks timers tørrpause. |
+| Ekstremer/rekorder | Min/maks med virkelig måletid, døgn/time, måned/år og valgfritt rekordintervall. Sen ankomst oppdaterer riktig periode. Aggregater bevares etter rådataretensjon.                                                                                               |
+| Middelverdier      | Legacy-rapporters observasjonsmiddel og nye klimametoders tidsmiddel er separate størrelser. Klima viser tidsdekning og lokalt døgn på 23/24/25 timer.                                                                                                          |
+| Graddager          | Min/maks-middel, eksplisitt °C-base for varme/kjøling og avgrensede vekstgraddager. Bare avsluttede døgn med nok temperaturdekning. Standard varmebase 18,3333333333 °C, vekstbase 10 °C/tak 30 °C.                                                             |
+| Referanse-ET       | Daglig FAO-56 Penman–Monteith, referansegress. Krever temperaturgrenser, faktisk damptrykk, vind med kjent målehøyde, globalstråling, absolutt trykk, posisjon/høyde og datadekning. FAOs Uccle-eksempel 18 verifiseres mot 3,88 mm/døgn.                       |
+| Sol                | Astronomy Engine-solhøyde og Haurwitz klarværsestimat. Integrert globalstråling i MJ/m². Solskinnstid er uttrykkelig en globalstrålingsproxy med justerbar terskel, ikke målt direkte solstråling.                                                              |
+| Trykktrend         | Tre timers regresjon for Sunnmørsvær; én times separat SQL-trend med minst seks punkter og 50 minutters dekning.                                                                                                                                                |
+| Astronomi          | Astronomy Engine 2.1.19: sol/måne opp/ned, skumring, månefase og belyst andel. Polarforhold kan gi manglende opp-/nedgang; terrenghorisont inngår ikke.                                                                                                         |
 
-Davis LOOP2-felt 7 er konsollens havnivåjusterte trykk. Felt 67 er absolutt trykk. Gatewayen utfører ikke ny havnivåkorreksjon på felt 7. LOOP/LOOP2 CRC er CRC-CCITT/XMODEM med polynom 0x1021 og startverdi 0. Rain collector-verdien må passe fysisk måler; 0,2 mm/vipp er en synlig standard som må kontrolleres på hver stasjon.
+Kalibrering beholder råverdier, bruker bekreftet konfigurasjonsrevisjon og gjelder nye observasjoner. Konfigurerbare regler for endringshastighet og fastlåste verdier kan flagge eller utelate målinger. Det brukes ingen skjulte spranggrenser. Tidsintegrasjonen krysser ikke datagap, ESP-omstart eller kalibreringsrevisjon. Sen ankomst reparerer tilstøtende intervaller uten dobbelttelling. Timesummer bevares etter rådataretensjon.
 
-Prosjektets valgte datavei er direkte ISS-radio via RFM69HCW på 868 MHz. Den har egen CRC-kontroll og dekoder `wg-iss-1`, med individuelle måletider og utløp. [Radiodokumentet](davis-radio.md) beskriver kildegrunnlag, modellspesifikk vindretning og regnakkumulering. Lufttrykk er etter avtale manglende; trykkavhengige beregninger blir derfor også manglende. Ingen havnivå- eller stasjonstrykk estimeres fra stasjonshøyden alene.
+Direkte ISS sender ikke trykk eller inneklima. Etter avtale forblir lufttrykk manglende; derfor er blant annet våttemperatur og referanse-ET også manglende for disse stasjonene. Trykk utledes ikke av høyden alene. LOOP2 skiller konsollens havnivåtrykk i felt 7 fra absolutt trykk i felt 67; ingen dobbeltkorreksjon utføres.
 
-ET, solmaksimum/solskinnstimer, graddager, vindrun/vindrose og komplett WD-rekord-/alarmfunksjon er ennå ikke implementert. De regnes ikke som null eller erstattes med antatte målinger. Se leveransestatus.
+ISS-regntelleren har syv bit. En full skjult omdreining kan ikke skilles fra ingen regn. Koden bruker den dokumenterte, konservative grensen i radiokontrakten og markerer tvetydige gap. Et helt regndøgn krever også fersk avlesning ved døgnslutt; en avlesning midt på dagen gjør ikke dagen komplett. Se [radiokontrakten](davis-radio.md).
 
-## Primærkilder
+## Primærkilder og tester
 
-- [PsychroLib, ASHRAE-metoder og tester](https://github.com/psychrometrics/psychrolib). JavaScript-kilden er vendoret uendret under MIT. Revisjon: `a42717d24ed08534642d6caf7dcbbf72b9510bea`; SHA-256: `a46572b93a90263b8e19e8d1372fe3135429aa9611cd57e00674188640cc96c9`. Lisens og kildehenvisning ligger ved koden.
-- [NWS vindavkjøling](https://www.weather.gov/safety/cold-wind-chill-chart) og [NWS varmeindeksligning](https://www.wpc.ncep.noaa.gov/html/heatindex_equation.shtml).
-- [FMI: implementasjon av BOM apparent temperature](https://github.com/fmidev/smartmet-library-newbase/blob/master/newbase/NFmiMetMath.cpp), [ECCC: humidex](https://climate.weather.gc.ca/glossary_e.html).
-- [Astronomy Engine: JavaScript API](https://github.com/cosinekitty/astronomy/tree/master/source/js).
-- [Davis: offisiell protokollmanual 2.6.1 via leverandørens nedlastinger](https://www.davisinstruments.com/pages/software-firmware-updates).
+- [PsychroLib](https://github.com/psychrometrics/psychrolib), ASHRAE. Uendret MIT-kilde, revisjon `a42717d24ed08534642d6caf7dcbbf72b9510bea`, SHA-256 `a46572b93a90263b8e19e8d1372fe3135429aa9611cd57e00674188640cc96c9`.
+- [NWS vindavkjøling](https://www.weather.gov/safety/cold-wind-chill-chart), [NWS varmeindeks](https://www.wpc.ncep.noaa.gov/html/heatindex_equation.shtml), [ECCC humidex](https://climate.weather.gc.ca/glossary_e.html), [FMI/BOM apparent temperature](https://github.com/fmidev/smartmet-library-newbase/blob/master/newbase/NFmiMetMath.cpp).
+- [FAO-56: Penman–Monteith](https://www.fao.org/4/X0490E/x0490e08.htm), [FAO-56: strålingsgrunnlag](https://www.fao.org/4/x0490e/x0490e07.htm), [NWS graddager](https://www.weather.gov/key/climate_heat_cool).
+- [Haurwitz i pvlib](https://github.com/pvlib/pvlib-python/blob/main/pvlib/clearsky.py), [Astronomy Engine API](https://github.com/cosinekitty/astronomy/tree/master/source/js).
 
-Disse kildene begrunner metodene. De dokumenterer ikke at Weather Display bruker identiske metoder i alle felt. Full ekvivalens trenger referansekjøringer mot den valgte WD-versjonen.
+Tallfestede kontroller finnes i `test/meteo.test.js`, `test/climate.test.js`, `test/davis-iss.test.js`, `test/weather-features.test.js` og `test/compatibility.test.js`. Kildene begrunner metodene; de beviser ikke identisk intern algoritme eller filformat i Weather Display. Levende referansesammenligning gjenstår.

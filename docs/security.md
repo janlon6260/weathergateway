@@ -30,7 +30,7 @@ Sertifikatsperring oppdaterer ACL og restarter broker for å avslutte eksisteren
 
 Pakker, forbindelser og køer er begrenset. Inntaket har streng Zod-validering, kjent stasjon, tidsgrenser, identitetskontroll, per-stasjon rategrense og duplikatnøkkel. Kommandotypene er en fast liste, med ID, sekvens og TTL. Ingen retained-kommandoer, vilkårlig shell eller OTA-kodeutkjøring. Kritiske enhetshandlinger har lokal replaykontroll og vedvarende tilstand. [Espressif: ESP-MQTT](https://docs.espressif.com/projects/esp-mqtt/en/latest/esp32/).
 
-Fjernfornyelse av klientsertifikat, komplett signert OTA og beskyttelse mot fysisk uttrekk av innebygde nøkler er fortsatt mangler. Secure Boot/eFuse settes ikke uten kjent fysisk revisjon og kontrollert produksjonsprosedyre. En referanse til TLS betyr ikke at lagrede nøkler dermed er fysisk beskyttet.
+Klientsertifikat fjernfornyes med samme nøkkel og prøves før gammel identitet sperres. OTA krever ECDSA P-256-signatur, stasjons-/miljøbinding, høyere sekvens, SHA-256 og eksplisitt administratorbekreftelse. Produksjonsprofil for Secure Boot V2 og flash-/NVS-kryptering er klargjort for verifisert ESP32 revision 3.0+. Den er ikke fysisk aktivert eller prøvd her. En referanse til TLS betyr ikke at lagrede nøkler dermed er fysisk beskyttet; førsteprovisjonering og eFuses må følge [firmwareveiledningen](../firmware/README.md).
 
 ## Drift
 
@@ -38,6 +38,6 @@ Normaldrift bruker egne UID-er, read-only containerrot, ingen capabilities og no
 
 Konfigurasjonsmutasjoner har utkast, revisjonskontroll, test, vedvarende tidsfrist og rollback. Sperring av kompromittert sertifikat og restart er eksplisitte operative handlinger, ikke reversible konfigurasjonsforsøk. Åpne tester må ikke brukes som en garanti for at ekstern DNS/Apache/hostendring automatisk kan rulles tilbake.
 
-Databasen er autoritativ og backups er konsistente med SHA-256. Backup, diskkapasitet, sertifikatutløp, tidsynkronisering og restore må overvåkes på hosten. Backup- og auditdata inneholder identitetsinformasjon og må beskyttes. En full database-/diskfeil kan gi datatap; firmware har ennå ikke varig offline-kø.
+Databasen er autoritativ og backups er konsistente med SHA-256, automatisk plan og retensjon. Backup, diskkapasitet, sertifikatutløp, tidsynkronisering og restore må overvåkes på hosten. Backup- og auditdata inneholder identitetsinformasjon og må beskyttes. ESP32 har en avgrenset varig sendekø og frigjør data først etter gatewayens lagringskvittering. Full kø og langvarig database-/diskfeil kan fortsatt gi datatap; tap rapporteres eksplisitt.
 
 OWASP ASVS 5.0.0 er relevant kontrollkatalog. Det er ikke gjennomført full sporbar ASVS-gjennomgang, penetrasjonstest, ekstern sikkerhetstest eller formell sikkerhetsgodkjenning. [OWASP ASVS](https://owasp.org/projects/asvs).

@@ -35,11 +35,22 @@ for (const env of ['production', 'development']) {
     WG_DEVELOPMENT_ORIGIN: '${WG_DEVELOPMENT_ORIGIN}',
     WG_PRODUCTION_ORIGIN: '${WG_PRODUCTION_ORIGIN}',
   };
+  const databases = {
+    WG_DB_ALLOWED_DATABASES: '${WG_DB_ALLOWED_DATABASES:-}',
+    WG_DB_LAN_ENDPOINTS: '${WG_DB_LAN_ENDPOINTS:-}',
+    WG_DB_PASSWORD: '${WG_DB_PASSWORD:-}',
+    WG_DB_PASSWORD_SKODJE: '${WG_DB_PASSWORD_SKODJE:-}',
+    WG_DB_PASSWORD_HAHJEM: '${WG_DB_PASSWORD_HAHJEM:-}',
+    WG_DB_PASSWORD_LONGVA: '${WG_DB_PASSWORD_LONGVA:-}',
+    WG_DB_PASSWORD_VATNE: '${WG_DB_PASSWORD_VATNE:-}',
+    WG_DB_CA_FILE: '/run/secrets/db-ca.pem',
+  };
   const control = {
     ...base,
     environment: {
       ...shared,
       WG_ROLE: 'control',
+      ...databases,
       WG_ADMIN_CIDRS: '${WG_ADMIN_CIDRS}',
       WG_TRUSTED_PROXIES: '${WG_TRUSTED_PROXIES}',
       WG_LDAP_URLS: '${WG_LDAP_URLS}',
@@ -51,12 +62,18 @@ for (const env of ['production', 'development']) {
       WG_LDAP_CA_FILE: '/run/secrets/ad-ca.pem',
       WG_ISSUER_KEY_FILE: '/run/secrets/client-ca.key',
       WG_ISSUER_CA_FILE: '/run/secrets/client-ca.pem',
+      WG_FIRMWARE_PUBLIC_KEY_FILE: '/run/secrets/firmware-signing-public.pem',
     },
     volumes: [
       bind(root, '/data', false),
-      ...['ldap-password', 'ad-ca.pem', 'client-ca.key', 'client-ca.pem'].map((f) =>
-        bind(`${secrets}/${f}`, `/run/secrets/${f}`),
-      ),
+      ...[
+        'ldap-password',
+        'ad-ca.pem',
+        'client-ca.key',
+        'client-ca.pem',
+        'db-ca.pem',
+        'firmware-signing-public.pem',
+      ].map((f) => bind(`${secrets}/${f}`, `/run/secrets/${f}`)),
     ],
     ports: ['${WG_ADMIN_BIND_IP:?Sett en privat LAN-adresse}:' + (port + 1) + ':8080'],
     networks: ['control'],
@@ -66,6 +83,7 @@ for (const env of ['production', 'development']) {
     environment: {
       ...shared,
       WG_ROLE: 'worker',
+      ...databases,
       WG_MQTT_URL: 'mqtts://broker:8883',
       WG_MQTT_CA_FILE: '/run/secrets/client-ca.pem',
       WG_MQTT_CERT_FILE: '/run/secrets/worker.pem',
@@ -73,7 +91,7 @@ for (const env of ['production', 'development']) {
     },
     volumes: [
       bind(root, '/data', false),
-      ...['client-ca.pem', 'worker.pem', 'worker.key'].map((f) =>
+      ...['client-ca.pem', 'worker.pem', 'worker.key', 'db-ca.pem'].map((f) =>
         bind(`${secrets}/${f}`, `/run/secrets/${f}`),
       ),
     ],

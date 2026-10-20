@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { DateTime } from 'luxon';
 import { Store } from './store.js';
 import { exportStation } from './observations.js';
+import { invalidateWeatherCache } from './weather-analytics.js';
 
 // The internet-facing process receives a weather-only read model. It cannot
 // open the control database, AD configuration, sessions, commands or raw files.
@@ -24,7 +25,7 @@ export function publicProjection(source) {
     destination.db
       .transaction(() => {
         destination.db.exec(
-          'DELETE FROM observations; DELETE FROM rollups; DELETE FROM rain_state; DELETE FROM configuration',
+          'DELETE FROM observations; DELETE FROM rollups; DELETE FROM rain_state; DELETE FROM weather_bins; DELETE FROM weather_segments; DELETE FROM rain_increments; DELETE FROM configuration',
         );
         destination.db
           .prepare(
@@ -80,11 +81,37 @@ export function publicProjection(source) {
         const put = destination.db.prepare(
           'INSERT INTO configuration VALUES (?,?,?) ON CONFLICT(scope) DO UPDATE SET revision=excluded.revision,payload=excluded.payload',
         );
-        for (const s of source.stationList()) put.run(s.scope, s.revision, JSON.stringify(s.value));
+        for (const current of source.stationList()) {
+          const s = source.confirmedConfiguration(current.scope);
+          put.run(s.scope, s.revision, JSON.stringify(s.value));
+        }
+        const weatherStart = Math.max(
+          source.clock() - 3600000,
+          recent.length ? Math.min(...recent.map((r) => r.observed_at)) - 300000 : source.clock() - 300000,
+        );
+        destination.db
+          .prepare('DELETE FROM weather_segments WHERE start_at>=? OR end_at<?')
+          .run(weatherStart, source.clock() - 3600000);
+        destination.db
+          .prepare(
+            'INSERT OR REPLACE INTO main.weather_segments SELECT * FROM upstream.weather_segments WHERE start_at>=?',
+          )
+          .run(weatherStart);
+        destination.db
+          .prepare(
+            'INSERT OR REPLACE INTO main.rain_increments SELECT * FROM upstream.rain_increments WHERE end_at>=?',
+          )
+          .run(initial ? source.clock() - 48 * 3600000 : weatherStart);
+        if (initial)
+          destination.db.exec(
+            'INSERT OR IGNORE INTO main.rain_increments SELECT * FROM upstream.rain_increments AS r WHERE amount_mm>0 AND end_at=(SELECT MAX(end_at) FROM upstream.rain_increments WHERE station_id=r.station_id AND amount_mm>0)',
+          );
         for (const r of recent) {
           const b = JSON.parse(r.body);
           delete b.source;
           delete b.configurationHash;
+          delete b.certificateId;
+          delete b.firmwareReleaseId;
           destination.db
             .prepare('INSERT OR IGNORE INTO observations VALUES (?,?,?,?,?,?)')
             .run(r.station_id, r.boot_id, r.sequence, r.observed_at, r.received_at, JSON.stringify(b));
@@ -102,6 +129,17 @@ export function publicProjection(source) {
             // dash, colon, dot, T and Z; never supplied by a request.
             if (!/^[0-9T:Z.\-]+$/.test(period)) throw new Error('Ugyldig aggregatperiode');
             copyRollups(`WHERE period='${period}'`);
+          }
+        if (initial)
+          destination.db.exec('INSERT OR REPLACE INTO main.weather_bins SELECT * FROM upstream.weather_bins');
+        else
+          for (const day of [...periods].filter((p) => p.length === 10)) {
+            const start = DateTime.fromISO(day, { zone: 'Europe/Oslo' }).startOf('day');
+            destination.db
+              .prepare(
+                'INSERT OR REPLACE INTO main.weather_bins SELECT * FROM upstream.weather_bins WHERE hour>=? AND hour<?',
+              )
+              .run(start.toMillis() - 3600000, start.plus({ days: 1 }).toMillis());
           }
         const rain = 'INSERT INTO main.rain_state SELECT * FROM upstream.rain_state WHERE ';
         const updateRain =
@@ -129,7 +167,9 @@ export function publicProjection(source) {
           .run(String(watermark));
       })
       .immediate();
-    for (const s of source.stationList().filter((s) => s.value.enabled)) exportStation(destination, s.value);
+    invalidateWeatherCache(destination);
+    for (const s of destination.stationList().filter((s) => s.value.enabled))
+      exportStation(destination, s.value);
   }
   return { sync, close: () => destination.close(), store: destination };
 }

@@ -23,6 +23,11 @@ node_modules/
 /artifacts/
 /firmware/build/
 /firmware/build-short/
+/firmware/build-local/
+/firmware/build-production/
+/firmware/sdkconfig.production
+/firmware/sdkconfig.production.old
+/firmware/sdkconfig.production-key.defaults
 /firmware/managed_components/
 /firmware/main/provisioning.h
 /firmware/main/device.pem

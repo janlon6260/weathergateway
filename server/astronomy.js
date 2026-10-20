@@ -1,7 +1,23 @@
-import { Body, Observer, SearchRiseSet, SearchAltitude, Illumination, MoonPhase } from 'astronomy-engine';
+import {
+  Body,
+  Observer,
+  SearchRiseSet,
+  SearchAltitude,
+  Illumination,
+  MoonPhase,
+  Equator,
+  Horizon,
+} from 'astronomy-engine';
+import { clearSkyRadiation } from './climate.js';
 import { DateTime } from 'luxon';
 
 const cache = new Map();
+export function currentSolarMaximum(station, at) {
+  const observer = new Observer(station.latitude, station.longitude, station.elevationM);
+  const date = new Date(at),
+    equator = Equator(Body.Sun, date, observer, true, true);
+  return clearSkyRadiation(Horizon(date, observer, equator.ra, equator.dec, 'normal').altitude);
+}
 export function astronomy(station, date) {
   const start = DateTime.fromISO(date, { zone: 'Europe/Oslo' }).startOf('day'),
     end = start.plus({ days: 1 });

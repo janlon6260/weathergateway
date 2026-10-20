@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl python3
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web ./web
+COPY shared ./shared
 RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund
 
@@ -15,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
 COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
 COPY --from=build --chown=10001:10001 /app/web/dist ./web/dist
 COPY --chown=10001:10001 server ./server
+COPY --chown=10001:10001 shared ./shared
 COPY --chown=10001:10001 scripts ./scripts
 COPY --chown=10001:10001 deploy/broker-entrypoint.sh ./deploy/broker-entrypoint.sh
 COPY --chown=10001:10001 package.json package-lock.json ./

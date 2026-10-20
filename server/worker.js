@@ -1,10 +1,14 @@
 import mqtt from 'mqtt';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { ackSchema, id } from './schema.js';
-import { hash } from './store.js';
+import { hash, Rejected } from './store.js';
+import { z } from 'zod';
 import { ingest, exportStation, latest } from './observations.js';
 import { maintain, writeReports } from './maintenance.js';
 import { publicProjection } from './public-projection.js';
+import { firmwareChunk } from './firmware-updates.js';
+import { requestCertificateRenewal } from './pki.js';
+import { checkAlarms } from './alarms.js';
 
 export function deviceHealth(store, stationId) {
   const observation = latest(store, stationId);
@@ -35,6 +39,35 @@ export function deviceHealth(store, stationId) {
   });
   return true;
 }
+export function firmwareHealth(store, stationId) {
+  const observation = latest(store, stationId);
+  if (
+    !observation?.sensorContact ||
+    !observation.firmwareReleaseId ||
+    store.clock() - Date.parse(observation.receivedAt) > 15000 ||
+    store.clock() - Date.parse(observation.observedAt) > 15000
+  )
+    return false;
+  const change = store
+    .changes()
+    .find(
+      (c) =>
+        c.scope === `firmware:${stationId}` &&
+        c.state === 'testing' &&
+        c.candidate.releaseId === observation.firmwareReleaseId,
+    );
+  if (!change) return false;
+  const command = store.db
+    .prepare("SELECT * FROM commands WHERE change_id=? AND kind='test_firmware' AND state='testing'")
+    .get(change.id);
+  if (!command || Date.parse(observation.observedAt) < command.created_at) return false;
+  store.health(change.id, true, {
+    firmwareAck: true,
+    firmwareTelemetry: true,
+    releaseId: observation.firmwareReleaseId,
+  });
+  return true;
+}
 export function handleAck(store, stationId, input) {
   const ack = ackSchema.parse(input);
   if (ack.stationId !== stationId) throw new Error('Feil ACK-identitet');
@@ -52,7 +85,21 @@ export function handleAck(store, stationId, input) {
         return false;
       if (command.change_id) {
         const c = store.getChange(command.change_id);
-        if (['testing', 'confirming'].includes(c.state)) {
+        if (c.scope.startsWith('firmware:') && ['testing', 'confirming'].includes(c.state)) {
+          if (
+            !['rejected', 'rolled_back'].includes(ack.status) &&
+            ack.firmwareReleaseId !== c.candidate.releaseId
+          )
+            throw new Error('ACK gjelder en annen firmware');
+          if (ack.status === 'applied' && command.kind === 'commit_firmware' && c.state === 'confirming') {
+            store.db.prepare("UPDATE changes SET state='confirmed' WHERE id=?").run(c.id);
+            store.audit(stationId, 'firmware_confirmed', {
+              changeId: c.id,
+              releaseId: ack.firmwareReleaseId,
+            });
+          } else if (['rejected', 'rolled_back'].includes(ack.status))
+            store.rollback(c.id, 'firmware_rejected', stationId);
+        } else if (['testing', 'confirming'].includes(c.state)) {
           if (
             ack.status === 'testing' &&
             command.kind === 'test_config' &&
@@ -76,7 +123,42 @@ export function handleAck(store, stationId, input) {
       store.db
         .prepare('UPDATE commands SET state=?,ack_json=? WHERE id=?')
         .run(ack.status, JSON.stringify(ack), ack.commandId);
+      if (command.kind === 'renew_certificate') {
+        const payload = JSON.parse(command.payload);
+        if (ack.status === 'applied') {
+          if (ack.certificateId !== payload.certificateId) throw new Error('Feil sertifikatkvittering');
+          const old = store.db
+            .prepare('SELECT revoked_at FROM certificates WHERE id=?')
+            .get(payload.previousCertificateId);
+          if (old?.revoked_at !== null) {
+            store.db
+              .prepare('UPDATE certificates SET revoked_at=? WHERE id=?')
+              .run(store.clock(), payload.certificateId);
+            store.db.prepare("UPDATE commands SET state='rejected' WHERE id=?").run(command.id);
+            store.db
+              .prepare("UPDATE certificate_renewals SET state='failed',error='REVOKED' WHERE command_id=?")
+              .run(command.id);
+            return false;
+          }
+          store.db
+            .prepare('UPDATE certificates SET revoked_at=? WHERE id=? AND station_id=?')
+            .run(store.clock(), payload.previousCertificateId, stationId);
+          store.db
+            .prepare("UPDATE certificate_renewals SET state='applied' WHERE command_id=?")
+            .run(command.id);
+        } else if (['rejected', 'rolled_back'].includes(ack.status)) {
+          store.db
+            .prepare('UPDATE certificates SET revoked_at=? WHERE id=?')
+            .run(store.clock(), payload.certificateId);
+          store.db
+            .prepare(
+              "UPDATE certificate_renewals SET state='failed',error='DEVICE_REJECTED' WHERE command_id=?",
+            )
+            .run(command.id);
+        }
+      }
       deviceHealth(store, stationId);
+      firmwareHealth(store, stationId);
       store.audit(stationId, 'command_ack', { commandId: ack.commandId, status: ack.status });
       return true;
     })
@@ -98,12 +180,50 @@ export function handleMessage(store, topic, buffer) {
   if (parts[5] === 'telemetry') {
     const inserted = ingest(store, stationId, message);
     deviceHealth(store, stationId);
+    firmwareHealth(store, stationId);
     return inserted;
   }
   if (parts[5] === 'acks') return handleAck(store, stationId, message);
   return false;
 }
-export function startWorker(store, config) {
+export function durableTelemetryReceipt(store, stationId, payload, { undated = false } = {}) {
+  if (payload.length > 16384) throw new Error('Meldingen er for stor');
+  const body = JSON.parse(payload.toString('utf8'));
+  const identity = z
+    .object({
+      stationId: id,
+      bootId: id,
+      sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    })
+    .passthrough()
+    .parse(body);
+  if (identity.stationId !== stationId) throw new Error('Feil kvitteringsidentitet');
+  let status = 'stored',
+    reason;
+  if (undated) reason = 'CLOCK_UNAVAILABLE';
+  else
+    try {
+      handleMessage(store, `wg/v1/${store.environment}/stations/${stationId}/telemetry`, payload);
+    } catch (error) {
+      if (!(error instanceof z.ZodError) && !(error instanceof Rejected && error.status < 500)) throw error;
+      reason = error instanceof z.ZodError ? 'INVALID_TELEMETRY' : 'TELEMETRY_REJECTED';
+    }
+  if (reason) {
+    store.db
+      .prepare('INSERT OR IGNORE INTO telemetry_rejections VALUES (?,?,?,?,?,?)')
+      .run(stationId, body.bootId, body.sequence, store.clock(), reason, payload.toString('utf8'));
+    status = 'rejected';
+  }
+  return {
+    version: 1,
+    stationId,
+    bootId: body.bootId,
+    sequence: body.sequence,
+    status,
+    ...(reason ? { reason } : {}),
+  };
+}
+export function startWorker(store, config, databaseWriter) {
   if (
     !config.mqttUrl ||
     !config.mqttCaFile ||
@@ -129,7 +249,19 @@ export function startWorker(store, config) {
   const projection = publicProjection(store);
   projection.sync();
   const root = `wg/v1/${store.environment}/stations`;
-  client.on('connect', () => client.subscribe([`${root}/+/telemetry`, `${root}/+/acks`], { qos: 1 }));
+  client.on('connect', () =>
+    client.subscribe(
+      [
+        `${root}/+/telemetry`,
+        `${root}/+/telemetry-undated`,
+        `${root}/+/status`,
+        `${root}/+/acks`,
+        `${root}/+/firmware-request`,
+        `${root}/+/certificate-request`,
+      ],
+      { qos: 1 },
+    ),
+  );
   client.on('error', (error) =>
     console.error(JSON.stringify({ event: 'mqtt_error', code: error.code || error.name })),
   );
@@ -154,7 +286,55 @@ export function startWorker(store, config) {
     }
     bucket.tokens--;
     try {
-      handleMessage(store, topic, payload);
+      if (topic === `${root}/${key}/telemetry` || topic === `${root}/${key}/telemetry-undated`) {
+        const receipt = durableTelemetryReceipt(store, id.parse(key), payload, {
+          undated: topic.endsWith('/telemetry-undated'),
+        });
+        client.publish(`${root}/${key}/telemetry-receipt`, JSON.stringify(receipt), {
+          qos: 1,
+          retain: false,
+          properties: { messageExpiryInterval: 30 },
+        });
+      } else if (topic === `${root}/${key}/certificate-request`) {
+        const request = z
+          .object({ version: z.literal(1), stationId: id, certificateId: id })
+          .strict()
+          .parse(JSON.parse(payload.toString('utf8')));
+        if (request.stationId !== id.parse(key)) throw new Error('Feil sertifikatidentitet');
+        requestCertificateRenewal(store, key, request.certificateId);
+      } else if (topic === `${root}/${key}/status`) {
+        const body = z
+          .object({
+            online: z.boolean(),
+            pending: z.number().int().nonnegative().optional(),
+            capacity: z.number().int().positive().optional(),
+            dropped: z.number().int().nonnegative().optional(),
+            clockSynchronized: z.boolean().optional(),
+            security: z
+              .object({
+                chipRevision: z.number().int().nonnegative(),
+                secureBoot: z.boolean(),
+                flashEncryption: z.boolean(),
+                nvsEncryption: z.boolean(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .parse(JSON.parse(payload.toString('utf8')));
+        store.db
+          .prepare('INSERT OR REPLACE INTO device_status VALUES (?,?,?)')
+          .run(id.parse(key), store.clock(), JSON.stringify(body));
+      } else if (topic === `${root}/${key}/firmware-request`) {
+        id.parse(key);
+        if (payload.length > 1024) throw new Error('For stor firmwareforespørsel');
+        const chunk = firmwareChunk(store, key, JSON.parse(payload.toString('utf8')));
+        client.publish(`${root}/${key}/firmware-data`, JSON.stringify(chunk), {
+          qos: 1,
+          retain: false,
+          properties: { messageExpiryInterval: 10 },
+        });
+      } else handleMessage(store, topic, payload);
     } catch {
       rejected++;
     }
@@ -163,6 +343,10 @@ export function startWorker(store, config) {
   const timer = setInterval(() => {
     try {
       store.sweep();
+      if (databaseWriter)
+        void databaseWriter.drain().catch(() => {
+          console.error(JSON.stringify({ event: 'database_worker_failed' }));
+        });
       counter++;
       if (counter % 60 === 0 && rejected) {
         console.warn(JSON.stringify({ event: 'mqtt_rejected', count: rejected }));
@@ -178,9 +362,11 @@ export function startWorker(store, config) {
       if (counter % 2 === 0) projection.sync();
       for (const station of store
         .stationList()
+        .map((s) => store.confirmedConfiguration(s.scope))
         .filter((s) => s.value.enabled && s.value.model !== 'Netatmo')) {
         if (counter % 5 === 0) exportStation(store, station.value);
         if (counter % 5 === 0) deviceHealth(store, station.value.id);
+        if (counter % 5 === 0) firmwareHealth(store, station.value.id);
       }
       if (client.connected)
         for (const command of store.db
@@ -216,7 +402,10 @@ export function startWorker(store, config) {
             .prepare("UPDATE commands SET state='sent',attempt_at=? WHERE id=?")
             .run(store.clock(), command.id);
         }
-      if (counter % 10 === 0) maintain(store);
+      if (counter % 10 === 0) {
+        maintain(store);
+        checkAlarms(store);
+      }
       if (counter % 3600 === 0 || counter === 1) {
         maintain(store, { pruneRaw: true });
         writeReports(store);

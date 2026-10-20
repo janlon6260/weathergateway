@@ -5,11 +5,12 @@ import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { configuration, initialize } from '../server/bootstrap.js';
 import { Store } from '../server/store.js';
-import { CertificateIssuer } from '../server/pki.js';
+import { CertificateIssuer, opensslExecutable } from '../server/pki.js';
+import { generateKeyPairSync } from 'node:crypto';
 
 mkdirSync('artifacts', { recursive: true });
 const root = mkdtempSync(resolve('artifacts/firmware-check-')),
-  openssl = process.env.WG_OPENSSL || 'openssl';
+  openssl = opensslExecutable;
 const key = join(root, 'ca.key'),
   ca = join(root, 'ca.pem');
 execFileSync(
@@ -51,7 +52,15 @@ try {
     path = join(root, 'bundle.json');
   writeFileSync(
     path,
-    JSON.stringify({ ...bundle, environment: 'development', configuration: deviceConfiguration }),
+    JSON.stringify({
+      ...bundle,
+      environment: 'development',
+      configuration: deviceConfiguration,
+      firmwarePublicKey: generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({
+        type: 'spki',
+        format: 'pem',
+      }),
+    }),
     { mode: 0o600 },
   );
   execFileSync(process.execPath, ['scripts/provision-firmware.js', path], {

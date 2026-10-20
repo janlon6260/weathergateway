@@ -4,12 +4,12 @@ Backend er ESM JavaScript på Node 24/Express 5. Adminpanelet er React med Vite.
 
 Hvert miljø har fire containere:
 
-| Tjeneste | Tilgang og ansvar |
-| --- | --- |
-| control | Privat admin/API, LDAPS, endringsmotor, sertifikatutsteder. Eget nettverk. |
-| worker | MQTT-klient med eget klientsertifikat, validering, beregning, eksport, watchdog og offentlig datakopi. |
-| broker | Mosquitto med TLS/mTLS og eksplisitte emnetilganger per sertifikat. |
-| public | Egen HTTP/Socket.IO-applikasjon uten administrasjonsruter. Separat lesekopi av værdata og eget lesetoken. |
+| Tjeneste | Tilgang og ansvar                                                                                         |
+| -------- | --------------------------------------------------------------------------------------------------------- |
+| control  | Privat admin/API, LDAPS, endringsmotor, sertifikatutsteder. Eget nettverk.                                |
+| worker   | MQTT-klient med eget klientsertifikat, validering, beregning, eksport, watchdog og offentlig datakopi.    |
+| broker   | Mosquitto med TLS/mTLS og eksplisitte emnetilganger per sertifikat.                                       |
+| public   | Egen HTTP/Socket.IO-applikasjon uten administrasjonsruter. Separat lesekopi av værdata og eget lesetoken. |
 
 `public` får bare volumet `<miljø>/public` lesbart. Kopien inneholder stasjonsmetadata, siste observasjon, opptil tre timers trendmålinger, døgn-/timeaggregater og eksportfiler. AD, sesjoner, kommandoer, råpakker og CA-/enhetsnøkler kopieres ikke. Kopien oppdateres hvert andre sekund og kan regenereres fra hoveddatabasen. Ikke monter hovedvolumet i public-tjenesten.
 
@@ -18,6 +18,8 @@ Observasjoner identifiseres av `(stationId, bootId, sequence)`. MQTT-duplikater 
 Døgn bruker `Europe/Oslo`, timer lagres med UTC-identitet. Vår-/høstskiftet gir 23/25 timer uten å slå sammen de to like lokale klokkeslettene. Time- og døgnaggregater bevares når råmålingene utløper. Råfil og database er ikke én filsystemtransaksjon: databasen er autoritativ ved feil under JSONL-skriving.
 
 ## Endringsforløp
+
+Ekstern MariaDB/MySQL-levering har en egen `database:<stasjons-UUID>`-konfigurasjon og administratorside. Inntaket oppretter leveringsrader i samme transaksjon som observasjonene. Worker bruker bare bekreftede databaseinnstillinger, sender fra varig kø og beholder køen ved feil. Tilkoblingstest er skrivebeskyttet. Miljøenes DB-mål er avgrenset med tillatelsesliste og et eget navnerom for utvikling. Se [leveringskontrakten](weather-database.md).
 
 1. Et utkast inneholder gammel og foreslått verdi og forventet revisjon. Kun ett åpent utkast per område.
 2. Testfunksjonen validerer skjema, lager og, for gatewayendringer, LDAPS samt at administratoren fortsatt har tilgang.

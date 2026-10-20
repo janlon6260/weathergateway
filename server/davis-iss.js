@@ -7,12 +7,16 @@ export const issAlgorithmVersion = 'wg-iss-1';
 export const issRainGapMs = (mmPerTip) => ((128 * mmPerTip) / 5000) * 3600000;
 export function rainCoverageComplete(rain, mmPerTip, at) {
   if (!rain || rain.unit === 'iss-incomplete') return false;
-  if (rain.unit !== 'iss-tips') return true;
   const dayEnd = DateTime.fromISO(rain.day, { zone: 'Europe/Oslo' }).plus({ days: 1 }).toMillis();
-  return Math.min(at, dayEnd) - rain.last_at < issRainGapMs(mmPerTip);
+  const target = Math.min(at, dayEnd),
+    gap = target - rain.last_at;
+  return (
+    Number.isFinite(gap) && gap >= 0 && gap < (rain.unit === 'iss-tips' ? issRainGapMs(mmPerTip) : 60000)
+  );
 }
 export const measurementLifetimeMs = {
   windSpeedMs: 15000,
+  windMeanMs: 15000,
   windDirectionDeg: 15000,
   temperatureC: 60000,
   humidityPct: 150000,
@@ -124,7 +128,7 @@ export function assembleIss(store, message, station) {
     prior?.source?.protocol === 'davis-iss' &&
     prior.bootId === message.bootId &&
     prior.configurationHash === message.configurationHash;
-  const measurements = compatible ? { ...prior.measurements } : {};
+  const measurements = compatible ? { ...(prior.rawMeasurements || prior.measurements) } : {};
   const measurementTimes = compatible ? { ...prior.measurementTimes } : {};
   for (const [metric, value] of Object.entries(decoded.measurements)) {
     measurements[metric] = value;
@@ -162,7 +166,7 @@ export function accumulateIssRain(store, stationId, body, observed, day) {
   const previous = store.db.prepare('SELECT * FROM iss_rain WHERE station_id=?').get(stationId);
   // Late observations remain archived but cannot advance a rolling counter.
   if (previous && observed <= previous.last_at) return;
-  const scale = store.current(`station:${stationId}`).value.rainCounterMmPerUnit;
+  const scale = store.confirmedValue(`station:${stationId}`).rainCounterMmPerUnit;
   const elapsed = previous ? observed - previous.last_at : Infinity;
   const delta = previous ? (counter - previous.counter + 128) % 128 : 0;
   // With the accepted maximum of 5000 mm/h a full wrap could be hidden after

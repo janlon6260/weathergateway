@@ -1,6 +1,8 @@
 import { readdirSync, unlinkSync, statfsSync, writeFileSync, renameSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { DateTime } from 'luxon';
 import { periodReport } from './observations.js';
+import { climateText } from './reports.js';
 
 // Each pass has a bounded SQL batch. Daily aggregates and audit are retained.
 export function maintain(store, { pruneRaw = false } = {}) {
@@ -11,6 +13,8 @@ export function maintain(store, { pruneRaw = false } = {}) {
       'DELETE FROM observations WHERE rowid IN (SELECT rowid FROM observations WHERE observed_at<? LIMIT 2000)',
     )
     .run(threshold).changes;
+  store.db.prepare('DELETE FROM weather_segments WHERE end_at<?').run(threshold);
+  store.db.prepare('DELETE FROM import_previews WHERE expires_at<?').run(store.clock() - 86400000);
   store.db
     .prepare(
       "DELETE FROM commands WHERE created_at<? AND state NOT IN ('queued','sent','received','testing')",
@@ -42,9 +46,27 @@ export function writeReports(store) {
         mode: 0o640,
       });
       renameSync(`${file}.tmp`, file);
+      const text = file.replace(/\.json$/, '.txt');
+      writeFileSync(
+        `${text}.tmp`,
+        climateText(station.value, periodReport(store, station.value.id, period)),
+        { mode: 0o640 },
+      );
+      renameSync(`${text}.tmp`, text);
     }
 }
 export function storageHealth(store) {
+  let writable = false;
+  if (!store.readonly) {
+    const probe = store.safe('system', `.write-probe-${randomUUID()}`);
+    try {
+      writeFileSync(probe, 'health\n', { flag: 'wx', mode: 0o600 });
+      unlinkSync(probe);
+      writable = true;
+    } catch {
+      /* actual filesystem failure is reported */
+    }
+  }
   const disk = statfsSync(store.root),
     total = disk.blocks * disk.bsize,
     available = disk.bavail * disk.bsize;
@@ -52,6 +74,6 @@ export function storageHealth(store) {
     totalBytes: total,
     availableBytes: available,
     freePercent: total ? (available / total) * 100 : 0,
-    writable: !store.readonly,
+    writable,
   };
 }

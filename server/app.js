@@ -3,17 +3,24 @@ import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { Server as SocketServer } from 'socket.io';
 import { resolve, join } from 'node:path';
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Rejected, hash } from './store.js';
 import { Sessions, requireRole, privateNetworks, equal } from './auth.js';
-import { stationSchema, deviceSchema, defaultDevice, id } from './schema.js';
-import { snapshot, latest, history, periodReport } from './observations.js';
+import { stationSchema, deviceSchema, defaultDevice, databaseSchema, id } from './schema.js';
+import { snapshot, latest, history, periodReport, legacy } from './observations.js';
 import { astronomy } from './astronomy.js';
 import { attachLegacySockets } from './legacy-sockets.js';
 import { storageHealth } from './maintenance.js';
 import { startBackup, listBackups } from './backups.js';
+import { databaseStatus } from './database-queue.js';
+import { uploadFirmware, proposeFirmware, firmwareReleases } from './firmware-updates.js';
+import { alarmStatus } from './alarms.js';
+import { climateDay } from './weather-analytics.js';
+import { records, climateText, renderTemplate } from './reports.js';
+import { importHistory } from './history-import.js';
+import { readiness, acceptanceChecks, deploymentFingerprint } from './readiness.js';
 
 const safeGatewayFields = [
   'confirmationSeconds',
@@ -45,7 +52,10 @@ function baseApp(config) {
       hsts: config.secureCookies,
     }),
   );
-  app.use(express.json({ limit: '256kb', strict: true }));
+  const json = express.json({ limit: '256kb', strict: true });
+  app.use((req, res, next) =>
+    req.method === 'POST' && req.path === '/api/firmware' ? next() : json(req, res, next),
+  );
   app.get('/health/live', (_req, res) =>
     res.json({ status: 'ok', role: config.role, environment: config.environment }),
   );
@@ -69,8 +79,8 @@ function errors(app) {
   });
   return app;
 }
-export async function probe(store, directory, change, principal) {
-  if (change.scope.startsWith('device:')) {
+export async function probe(store, directory, change, principal, databaseWriter) {
+  if (change.scope.startsWith('device:') || change.scope.startsWith('firmware:')) {
     if (!change.health || store.clock() - change.health.at > 30000)
       throw new Rejected('Venter på bekreftelse og telemetri fra enheten');
     return change.health;
@@ -79,9 +89,20 @@ export async function probe(store, directory, change, principal) {
   const report = { storage: 'ok', schema: 'ok' };
   if (change.scope === 'gateway')
     Object.assign(report, await directory.probe(principal, change.candidate.directory));
+  if (change.scope.startsWith('database:')) {
+    if (!databaseWriter) throw new Rejected('Databasetjenesten er ikke tilgjengelig', 503);
+    Object.assign(report, await databaseWriter.probe(change.candidate));
+  }
+  if (change.scope.startsWith('station:'))
+    for (const template of change.candidate.templates || [])
+      renderTemplate(
+        template.content,
+        { station: change.candidate, weather: legacy(store, change.candidate) },
+        { html: template.name.endsWith('.html') },
+      );
   return report;
 }
-export function controlApp({ store, config, directory, certificates }) {
+export function controlApp({ store, config, directory, certificates, databaseWriter }) {
   const app = baseApp(config),
     sessions = new Sessions(store, directory, { secure: config.secureCookies }),
     allowedNetwork = privateNetworks(config.adminCidrs),
@@ -163,12 +184,24 @@ export function controlApp({ store, config, directory, certificates }) {
             },
           },
       stations: store.stationList(),
+      databases: admin ? databaseStatus(store) : [],
+      databasePasswordKeys: admin ? Object.keys(config.databasePasswords || {}) : [],
+      databaseAllowlist: admin ? config.databaseAllowlist || [] : [],
+      databaseLanEndpoints: admin ? config.databaseLanEndpoints || [] : [],
+      firmwareReleases: admin ? firmwareReleases(store) : [],
+      alarms: alarmStatus(store),
       devices:
         admin || req.session.principal.roles.includes('operator')
           ? store.configurations('device:').map((device) => {
               const observation = latest(store, device.value.stationId);
               return {
                 ...device,
+                delivery: (() => {
+                  const row = store.db
+                    .prepare('SELECT * FROM device_status WHERE station_id=?')
+                    .get(device.value.stationId);
+                  return row ? { ...JSON.parse(row.payload), receivedAt: row.received_at } : null;
+                })(),
                 telemetry: observation
                   ? {
                       observedAt: observation.observedAt,
@@ -185,18 +218,68 @@ export function controlApp({ store, config, directory, certificates }) {
           : [],
       changes:
         admin || req.session.principal.roles.includes('operator')
-          ? store.changes().filter((c) => admin || c.scope !== 'gateway')
+          ? store
+              .changes()
+              .filter(
+                (c) =>
+                  admin ||
+                  (c.scope !== 'gateway' &&
+                    !c.scope.startsWith('database:') &&
+                    !c.scope.startsWith('firmware:')),
+              )
           : [],
       commands: admin || req.session.principal.roles.includes('operator') ? store.commandList() : [],
       now: store.clock(),
     });
   });
   app.get('/api/live', (_req, res) => res.json(snapshot(store)));
+  app.get('/api/readiness', permission('administrator'), (_req, res) => res.json(readiness(store, config)));
+  app.post('/api/readiness/evidence', permission('administrator'), (req, res) => {
+    const evidence = z
+      .object({
+        checkId: z.enum(Object.keys(acceptanceChecks)),
+        configurationHash: z.string().regex(/^[a-f0-9]{64}$/),
+        passed: z.boolean(),
+        note: z.string().trim().min(20).max(2000),
+      })
+      .strict()
+      .parse(req.body);
+    if (evidence.configurationHash !== deploymentFingerprint(store))
+      throw new Rejected('Innstillingene er endret. Kontroller produksjonsstatusen på nytt.', 409);
+    store.db
+      .prepare('INSERT OR REPLACE INTO deployment_acceptance VALUES (?,?,?,?,?,?)')
+      .run(
+        evidence.checkId,
+        evidence.configurationHash,
+        store.clock(),
+        req.session.principal.sid,
+        Number(evidence.passed),
+        evidence.note,
+      );
+    store.audit(req.session.principal.sid, 'deployment_acceptance_recorded', {
+      checkId: evidence.checkId,
+      passed: evidence.passed,
+      configurationHash: evidence.configurationHash,
+    });
+    res.json(readiness(store, config));
+  });
+  app.post('/api/alarms/events/:eventId/acknowledge', permission('operator'), (req, res) => {
+    const eventId = z.coerce.number().int().positive().parse(req.params.eventId);
+    const result = store.db
+      .prepare(
+        'UPDATE alarm_events SET acknowledged_at=?,acknowledged_by=? WHERE id=? AND acknowledged_at IS NULL',
+      )
+      .run(store.clock(), req.session.principal.sid, eventId);
+    if (!result.changes) throw new Rejected('Alarmhendelsen er allerede kvittert eller finnes ikke', 409);
+    store.audit(req.session.principal.sid, 'alarm_acknowledged', { eventId });
+    res.json({ ok: true });
+  });
   app.get('/api/health', permission('administrator'), (_req, res) => {
     res.json({
       environment: store.environment,
       storage: storageHealth(store),
       database: store.db.prepare('SELECT 1 AS ok').get().ok === 1 ? 'ok' : 'error',
+      externalDatabases: databaseStatus(store),
       certificatesExpiring: store.db
         .prepare('SELECT station_id,expires_at FROM certificates WHERE revoked_at IS NULL AND expires_at<?')
         .all(store.clock() + 14 * 86400000),
@@ -205,6 +288,29 @@ export function controlApp({ store, config, directory, certificates }) {
   app.get('/api/backups', permission('administrator'), (_req, res) => res.json(listBackups(store)));
   app.post('/api/backups', permission('administrator'), (req, res) =>
     res.status(202).json(startBackup(store, req.session.principal.sid)),
+  );
+  app.post(
+    '/api/firmware',
+    permission('administrator'),
+    express.json({ limit: '3mb', strict: true }),
+    (req, res) => res.status(201).json(uploadFirmware(store, config, req.body, req.session.principal.sid)),
+  );
+  app.post('/api/firmware/:releaseId/deploy', permission('administrator'), (req, res) =>
+    res.status(201).json(proposeFirmware(store, req.params.releaseId, req.session.principal.sid)),
+  );
+  app.post(
+    '/api/databases/:stationId/test',
+    permission('administrator'),
+    asyncHandler(async (req, res) => {
+      const stationId = id.parse(req.params.stationId);
+      store.current(`station:${stationId}`);
+      const target = databaseSchema.parse(req.body);
+      if (target.stationId !== stationId) throw new Rejected('Feil stasjonsidentitet', 400);
+      if (!databaseWriter) throw new Rejected('Databasetjenesten er ikke tilgjengelig', 503);
+      const report = await databaseWriter.probe(target);
+      store.audit(req.session.principal.sid, 'database_connection_test', { stationId });
+      res.json(report);
+    }),
   );
   app.get('/api/live/events', (req, res) => {
     const key = hash(req.session.token);
@@ -243,6 +349,11 @@ export function controlApp({ store, config, directory, certificates }) {
     store.db
       .transaction(() => {
         store.initialize(`station:${stationId}`, { ...requested, id: stationId, enabled: false });
+        store.initialize(`alarms:${stationId}`, { stationId, rules: [] });
+        store.initialize(
+          `database:${stationId}`,
+          databaseSchema.parse({ stationId, stationKey: requested.key }),
+        );
         store.initialize(
           `device:${stationId}`,
           defaultDevice(stationId, store.current('gateway').value.publicOrigin, store.environment),
@@ -266,7 +377,11 @@ export function controlApp({ store, config, directory, certificates }) {
       })
       .strict()
       .parse(req.body);
-    if (scope === 'gateway') requireRole(req.session.principal, 'administrator');
+    if (scope === 'gateway' || scope.startsWith('database:'))
+      requireRole(req.session.principal, 'administrator');
+    if (scope.startsWith('firmware:')) throw new Rejected('Velg en signert utgivelse under Firmware', 400);
+    if (scope.startsWith('database:')) store.current(`station:${scope.slice(9)}`);
+    if (scope.startsWith('alarms:')) store.current(`station:${scope.slice(7)}`);
     res.status(201).json(store.propose(scope, value, revision, req.session.principal.sid));
   });
   app.post(
@@ -276,11 +391,17 @@ export function controlApp({ store, config, directory, certificates }) {
       const changeId = id.parse(req.params.changeId),
         change = store.getChange(changeId),
         actor = req.session.principal.sid;
-      if (change.scope === 'gateway') requireRole(req.session.principal, 'administrator');
+      if (
+        change.scope === 'gateway' ||
+        change.scope.startsWith('database:') ||
+        change.scope.startsWith('firmware:')
+      )
+        requireRole(req.session.principal, 'administrator');
       if (req.params.action === 'test') {
-        const report = change.scope.startsWith('device:')
-          ? null
-          : await probe(store, directory, change, req.session.principal);
+        const report =
+          change.scope.startsWith('device:') || change.scope.startsWith('firmware:')
+            ? null
+            : await probe(store, directory, change, req.session.principal, databaseWriter);
         store.begin(changeId, actor);
         if (report) store.health(changeId, true, report);
       } else if (req.params.action === 'confirm') {
@@ -291,8 +412,9 @@ export function controlApp({ store, config, directory, certificates }) {
             req.hostname !== new URL(change.candidate.adminOrigin).hostname)
         )
           throw new Rejected('Åpne den nye adminadressen og bekreft derfra før fristen utløper');
-        const report = await probe(store, directory, change, req.session.principal);
-        if (!change.scope.startsWith('device:')) store.health(changeId, true, report);
+        const report = await probe(store, directory, change, req.session.principal, databaseWriter);
+        if (!change.scope.startsWith('device:') && !change.scope.startsWith('firmware:'))
+          store.health(changeId, true, report);
         store.confirm(changeId, actor);
       } else if (req.params.action === 'cancel') store.rollback(changeId, 'cancelled', actor);
       else throw new Rejected('Ukjent handling', 404);
@@ -333,6 +455,9 @@ export function controlApp({ store, config, directory, certificates }) {
       });
       res.json({
         ...bundle,
+        ...(config.firmwarePublicKeyFile
+          ? { firmwarePublicKey: readFileSync(config.firmwarePublicKeyFile, 'utf8') }
+          : {}),
         configuration,
         configurationHash: hash(configuration),
         environment: store.environment,
@@ -351,6 +476,11 @@ export function controlApp({ store, config, directory, certificates }) {
   );
   app.post('/api/certificates/:certificateId/revoke', permission('administrator'), (req, res) => {
     const certificateId = id.parse(req.params.certificateId);
+    store.db
+      .prepare(
+        "UPDATE certificates SET revoked_at=? WHERE id IN (SELECT new_id FROM certificate_renewals WHERE certificate_id=? AND state IN ('queued','issuing','sent'))",
+      )
+      .run(store.clock(), certificateId);
     const changed = store.db
       .prepare('UPDATE certificates SET revoked_at=? WHERE id=? AND revoked_at IS NULL')
       .run(store.clock(), certificateId);
@@ -363,6 +493,7 @@ export function controlApp({ store, config, directory, certificates }) {
       station = store.current(`station:${stationId}`).value;
     res.json({
       ...history(store, stationId, req.params.date),
+      climate: climateDay(store, station, req.params.date),
       astronomy: astronomy(station, req.params.date),
     });
   });
@@ -371,6 +502,27 @@ export function controlApp({ store, config, directory, certificates }) {
     store.current(`station:${stationId}`);
     res.json(periodReport(store, stationId, req.params.period));
   });
+  app.get('/api/records/:stationId', (req, res) => {
+    const stationId = id.parse(req.params.stationId);
+    store.current(`station:${stationId}`);
+    const options = z
+      .object({ from: z.string().optional(), to: z.string().optional() })
+      .strict()
+      .parse(req.query);
+    res.json(records(store, stationId, options));
+  });
+  app.get('/api/report-text/:stationId/:period', (req, res) => {
+    const stationId = id.parse(req.params.stationId),
+      station = store.current(`station:${stationId}`).value,
+      report = periodReport(store, stationId, req.params.period);
+    res
+      .type('text/plain')
+      .attachment(`climate-${station.key}-${report.period}.txt`)
+      .send(climateText(station, report));
+  });
+  app.post('/api/history-import', permission('administrator'), (req, res) =>
+    res.json(importHistory(store, req.body, req.session.principal.sid)),
+  );
   app.get('/api/promotion', permission('administrator'), (_req, res) => {
     if (store.environment !== 'development')
       throw new Rejected('Bare utvikling kan eksportere en overføringspakke');
@@ -417,6 +569,11 @@ export function controlApp({ store, config, directory, certificates }) {
           } catch (e) {
             if (e.status !== 404) throw e;
             store.initialize(`station:${station.id}`, { ...station, enabled: false });
+            store.initialize(`alarms:${station.id}`, { stationId: station.id, rules: [] });
+            store.initialize(
+              `database:${station.id}`,
+              databaseSchema.parse({ stationId: station.id, stationKey: station.key }),
+            );
             store.initialize(
               `device:${station.id}`,
               defaultDevice(station.id, store.current('gateway').value.publicOrigin, store.environment),
@@ -460,12 +617,13 @@ export function publicApp({ store, config }) {
         (s) =>
           s.value.enabled &&
           s.value.key === req.params.stationKey &&
-          s.value.exportName === req.params.filename,
+          (s.value.exportName === req.params.filename ||
+            s.value.templates?.some((t) => t.name === req.params.filename)),
       );
     if (!station) throw new Rejected('Filen finnes ikke', 404);
     res
       .set('Cache-Control', 'no-store')
-      .sendFile(station.value.exportName, { root: store.safe('stations', station.value.id, 'exports') });
+      .sendFile(req.params.filename, { root: store.safe('stations', station.value.id, 'exports') });
   });
   errors(app);
   return {

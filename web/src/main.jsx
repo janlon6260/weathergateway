@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import { meteorologyDefaults, calibrationDefaults } from '../../shared/meteorology-settings.js';
+import { alarmMetrics } from '../../shared/alarm-metrics.js';
+import {
+  databaseColumns,
+  extendedDatabaseColumns,
+  vatneDatabaseColumns,
+} from '../../shared/database-columns.js';
 
 const labels = {
   overview: 'Oversikt',
@@ -10,6 +17,23 @@ const labels = {
   settings: 'Innstillinger',
   reports: 'Rapporter',
   audit: 'Hendelseslogg',
+  databases: 'Databaser',
+  firmware: 'Firmware',
+  alarms: 'Alarmer',
+  readiness: 'Produksjonsstatus',
+};
+const pageDescriptions = {
+  overview: 'Status og siste målinger fra værstasjonene dine.',
+  stations: 'Stasjoner, kalibrering, datakvalitet og eksportfiler.',
+  devices: 'Tilkobling, radio og fjernstyring av ESP32-enhetene.',
+  changes: 'Test, kontroller og bekreft endringer før fristen løper ut.',
+  settings: 'Gateway, innlogging og miljøspesifikke innstillinger.',
+  reports: 'Historikk, grafer, klimautdata og rekorder.',
+  audit: 'Registrerte handlinger og endringer i dette miljøet.',
+  databases: 'Tilkoblinger og levering til stasjonenes værdatabaser.',
+  firmware: 'Signerte utgivelser og kontrollert oppdatering av enhetene.',
+  alarms: 'Alarmregler, aktive varsler og hendelseshistorikk.',
+  readiness: 'Driftskontroller og dokumenterte prøver før produksjon.',
 };
 const stateLabels = {
   draft: 'Utkast',
@@ -251,12 +275,12 @@ function App() {
   );
   const openChanges = data.changes.filter((c) => ['draft', 'testing', 'confirming'].includes(c.state));
   const visiblePages = Object.keys(labels)
-    .filter((p) => !['settings', 'audit'].includes(p) || admin)
+    .filter((p) => !['settings', 'audit', 'databases', 'firmware', 'readiness'].includes(p) || admin)
     .filter((p) => p !== 'devices' || operator);
   function scopeName(scope) {
     return scope === 'gateway'
       ? 'Gateway'
-      : `${scope.startsWith('device:') ? 'Enhet' : 'Stasjon'} · ${data.stations.find((s) => scope.endsWith(s.value.id))?.value.name || scope}`;
+      : `${scope.startsWith('device:') ? 'Enhet' : scope.startsWith('database:') ? 'Database' : scope.startsWith('firmware:') ? 'Firmware' : scope.startsWith('alarms:') ? 'Alarmer' : 'Stasjon'} · ${data.stations.find((s) => scope.endsWith(s.value.id))?.value.name || scope}`;
   }
   async function saveChange(scope, item, revision) {
     await api('/changes', { scope, value: item, revision });
@@ -352,10 +376,10 @@ function App() {
         </a>
         <p className="nav-caption">ARBEIDSOMRÅDE</p>
         <nav>
-          {visiblePages.map((p, index) => (
+          {visiblePages.map((p) => (
             <button key={p} className={page === p ? 'active' : ''} onClick={() => setPage(p)}>
-              <span className="nav-icon">
-                {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡'][Object.keys(labels).indexOf(p)]}
+              <span className="nav-icon" aria-hidden="true">
+                {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓'][Object.keys(labels).indexOf(p)]}
               </span>
               {labels[p]}
               {p === 'changes' && openChanges.length > 0 && (
@@ -416,15 +440,7 @@ function App() {
             <div>
               <p className="eyebrow">WEATHER GATEWAY</p>
               <h1>{labels[page]}</h1>
-              <p className="muted">
-                {page === 'overview'
-                  ? 'Status og siste målinger fra værstasjonene dine.'
-                  : page === 'changes'
-                    ? 'Test, kontroller og bekreft endringer før fristen løper ut.'
-                    : page === 'settings'
-                      ? 'Gateway, innlogging og miljøspesifikke innstillinger.'
-                      : 'Administrer værstasjoner og tilhørende data.'}
-              </p>
+              <p className="muted">{pageDescriptions[page]}</p>
             </div>
             {page === 'stations' && operator && (
               <button className="primary" onClick={() => setModal({ type: 'station' })}>
@@ -642,6 +658,14 @@ function App() {
                         <dd>Revisjon {device.revision}</dd>
                         <dt>Identitet</dt>
                         <dd className="monospace small">{device.value.stationId}</dd>
+                        <dt>Sendekø på ESP32</dt>
+                        <dd>
+                          {device.delivery
+                            ? `${device.delivery.pending ?? '–'} av ${device.delivery.capacity ?? '–'} plasser`
+                            : 'Ingen køstatus mottatt'}
+                        </dd>
+                        <dt>Målinger som ikke fikk plass</dt>
+                        <dd>{device.delivery?.dropped ?? '–'}</dd>
                       </dl>
                       {device.value.interface === 'davis-iss-rfm69' && (
                         <p className="muted small">
@@ -731,7 +755,100 @@ function App() {
               <Operations api={api} onError={setError} />
             </>
           )}
-          {page === 'reports' && <Reports stations={data.stations} api={api} onError={setError} />}
+          {page === 'databases' && admin && (
+            <section className="panel settings-form">
+              <h2>Skriving til eksisterende stasjonsdatabaser</h2>
+              <p>
+                Værdata sendes til wx_data etter at tilkoblingen er testet og gjort gjeldende. Køen beholdes
+                ved databaseutfall og omstart.
+              </p>
+              <p className="muted">
+                Tillatte databaser:{' '}
+                {data.databaseAllowlist?.join(', ') || 'Ingen er konfigurert i WG_DB_ALLOWED_DATABASES.'}
+              </p>
+              {!!data.databaseLanEndpoints?.length && (
+                <p className="muted">Tillatte LAN-mål: {data.databaseLanEndpoints.join(', ')}</p>
+              )}
+              {environment !== 'production' && (
+                <p className="notice">
+                  Utvikling kan bare skrive til separate testdatabaser med navn som starter med wg_dev_.
+                </p>
+              )}
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Stasjon</th>
+                      <th>Databasemål</th>
+                      <th>Status</th>
+                      <th>I kø</th>
+                      <th>Siste leverte måletid</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data.databases || []).map((record) => (
+                      <tr key={record.scope}>
+                        <td>
+                          {
+                            data.stations.find((station) => station.value.id === record.value.stationId)
+                              ?.value.name
+                          }
+                        </td>
+                        <td>
+                          {record.value.host
+                            ? `${record.value.host}/${record.value.database}`
+                            : 'Ikke konfigurert'}
+                        </td>
+                        <td>{record.lastError || (record.confirmedEnabled ? 'Aktivert' : 'Deaktivert')}</td>
+                        <td>
+                          {record.pending}
+                          {record.paused > 0 && ` (${record.paused} venter på tidligere mål)`}
+                        </td>
+                        <td>{time(record.lastDeliveredAt)}</td>
+                        <td>
+                          <button onClick={() => setModal({ type: 'database', record })}>Konfigurer</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+          {page === 'firmware' && admin && (
+            <FirmwareManager
+              releases={data.firmwareReleases || []}
+              stations={data.stations}
+              pending={pending}
+              upload={(file) =>
+                action(async () => {
+                  await api('/firmware', JSON.parse(await file.text()));
+                  setNotice('Signert firmware er lastet opp. Velg utgivelsen for å opprette en test.');
+                })
+              }
+              deploy={(releaseId) =>
+                action(async () => {
+                  await api(`/firmware/${releaseId}/deploy`, {});
+                  setPage('changes');
+                })
+              }
+            />
+          )}
+          {page === 'alarms' && (
+            <AlarmManager
+              data={data.alarms}
+              stations={data.stations}
+              operator={operator}
+              pending={pending}
+              configure={(record) => setModal({ type: 'alarms', record })}
+              acknowledge={(eventId) => action(() => api(`/alarms/events/${eventId}/acknowledge`, {}))}
+            />
+          )}
+          {page === 'reports' && (
+            <Reports stations={data.stations} api={api} onError={setError} admin={admin} />
+          )}
+          {page === 'readiness' && admin && <ReadinessPanel api={api} onError={setError} />}
           {page === 'audit' && (
             <section className="panel">
               <div className="table-scroll">
@@ -793,6 +910,22 @@ function App() {
               <DeviceForm
                 record={modal.record}
                 pending={pending}
+                save={(item) => action(() => saveChange(modal.record.scope, item, modal.record.revision))}
+              />
+            )}
+            {modal.type === 'alarms' && (
+              <AlarmForm
+                record={modal.record}
+                pending={pending}
+                save={(item) => action(() => saveChange(modal.record.scope, item, modal.record.revision))}
+              />
+            )}
+            {modal.type === 'database' && (
+              <DatabaseForm
+                record={modal.record}
+                pending={pending}
+                passwordKeys={data.databasePasswordKeys || []}
+                test={(item) => api(`/databases/${item.stationId}/test`, item)}
                 save={(item) => action(() => saveChange(modal.record.scope, item, modal.record.revision))}
               />
             )}
@@ -883,9 +1016,185 @@ function Field({ label, name, item, set, type = 'text', ...props }) {
     </label>
   );
 }
+function DatabaseForm({ record, pending, passwordKeys, save, test }) {
+  const [item, set] = useState({
+    ...structuredClone(record.value),
+    transport: record.value.transport === 'tls' ? 'tls' : 'lan',
+    stationNameColumn: record.value.stationNameColumn ?? '',
+  });
+  const [columns, setColumns] = useState(JSON.stringify(record.value.columns, null, 2));
+  const [formError, setFormError] = useState('');
+  const [testMessage, setTestMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (callback) => {
+    try {
+      const parsed = JSON.parse(columns);
+      setFormError('');
+      setTestMessage('');
+      setBusy(true);
+      const report = await callback({
+        ...item,
+        stationNameColumn: item.stationNameColumn || null,
+        columns: parsed,
+      });
+      if (report?.database)
+        setTestMessage(
+          report.database === 'disabled'
+            ? 'Databaseskriving er deaktivert.'
+            : 'Tilkobling og tabellskjema er godkjent. Testen skrev ingen værdata.',
+        );
+    } catch (error) {
+      setFormError(error instanceof SyntaxError ? 'Feltkoblingen må være gyldig JSON.' : error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      className="settings-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit(save);
+      }}
+    >
+      <h2 id="modal-title">Database for {item.stationKey}</h2>
+      <p>
+        Bruk tilkoblingen til stasjonens eksisterende wx_data-tabell på privat lokalnett. TLS kan velges
+        dersom databaseserveren er satt opp for det.
+      </p>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={item.enabled}
+          onChange={(event) => set({ ...item, enabled: event.target.checked })}
+        />{' '}
+        Aktiver databaseskriving etter bekreftelse
+      </label>
+      <div className="form-grid">
+        <Field
+          label="Databasevert (IP eller FQDN)"
+          name="host"
+          item={item}
+          set={set}
+          required={item.enabled}
+        />
+        <Field label="Port" name="port" type="number" min="1" max="65535" item={item} set={set} required />
+        <label>
+          Transport
+          <select
+            value={item.transport}
+            onChange={(event) => set({ ...item, transport: event.target.value })}
+          >
+            <option value="lan">Privat lokalnett (uten TLS)</option>
+            <option value="tls">TLS med sertifikatkontroll</option>
+          </select>
+        </label>
+        <Field label="Databasenavn" name="database" item={item} set={set} required={item.enabled} />
+        <Field
+          label="Skrivebruker"
+          name="user"
+          item={item}
+          set={set}
+          required={item.enabled}
+          autoComplete="off"
+        />
+        <Field label="Stasjonsnavn i station_id" name="stationKey" item={item} set={set} required />
+        <Field
+          label="Kolonne for stasjonsnavn (valgfri, Vatne: station_name)"
+          name="stationNameColumn"
+          item={item}
+          set={set}
+        />
+        <Field
+          label="Lagringsintervall (sekunder)"
+          name="intervalSeconds"
+          type="number"
+          min="1"
+          max="86400"
+          item={item}
+          set={set}
+          required
+        />
+        <Field
+          label="Passordvariabel i .env"
+          name="passwordEnv"
+          item={item}
+          set={set}
+          required
+          list="database-password-keys"
+        />
+        <datalist id="database-password-keys">
+          {passwordKeys.map((key) => (
+            <option value={key} key={key} />
+          ))}
+        </datalist>
+        <label>
+          Vindenhet i databasen
+          <select value={item.windUnit} onChange={(event) => set({ ...item, windUnit: event.target.value })}>
+            <option value="kmh">km/t (eksisterende standard)</option>
+            <option value="ms">m/s</option>
+          </select>
+        </label>
+      </div>
+      {item.transport === 'lan' && (
+        <p className="notice">
+          Gatewayen kobler direkte til SQL-serveren på lokalnettet. Vert og port må stå i WG_DB_LAN_ENDPOINTS
+          og peke på en privat adresse. TLS eller VPN er ikke påkrevd i denne modusen.
+        </p>
+      )}
+      <p className="muted small">
+        Selve passordet settes i .env. Privat database-CA kan angis med WG_DB_CA_FILE. Databasemålet må være
+        tillatt i WG_DB_ALLOWED_DATABASES for dette miljøet.
+      </p>
+      <label>
+        Feltkobling til wx_data (JSON; null utelater en måling)
+        <textarea
+          rows="12"
+          value={columns}
+          onChange={(event) => setColumns(event.target.value)}
+          spellCheck={false}
+        />
+      </label>
+      <button
+        type="button"
+        onClick={() =>
+          setColumns(
+            JSON.stringify(
+              {
+                ...databaseColumns,
+                ...extendedDatabaseColumns,
+                ...(item.stationKey.toLowerCase() === 'vatne' ? vatneDatabaseColumns : {}),
+              },
+              null,
+              2,
+            ),
+          )
+        }
+      >
+        Bruk alle eksisterende værkolonner
+      </button>
+      {record.pending > 0 && (
+        <p className="notice">
+          {record.pending} rader venter på levering. Lever køen før du endrer databasemål, stasjonsnavn,
+          enheter eller feltkobling. Rader til tidligere mål beholdes i køen.
+        </p>
+      )}
+      {formError && <p role="alert">{formError}</p>}
+      {testMessage && <p role="status">{testMessage}</p>}
+      <div className="actions">
+        <button type="button" disabled={pending || busy} onClick={() => submit(test)}>
+          Test tilkobling og skjema
+        </button>
+        <button className="primary" disabled={pending || busy} type="submit">
+          Lagre utkast
+        </button>
+      </div>
+    </form>
+  );
+}
 function StationForm({ record, pending, save }) {
-  const [item, set] = useState(
-    record?.value || {
+  const [item, set] = useState({
+    ...(record?.value || {
       name: '',
       key: '',
       model: 'Davis Vantage Pro2',
@@ -895,8 +1204,12 @@ function StationForm({ record, pending, save }) {
       elevationM: 0,
       exportName: 'station-wd.txt',
       rainCounterMmPerUnit: 0.2,
-    },
-  );
+    }),
+    meteorology: { ...meteorologyDefaults, ...record?.value.meteorology },
+    calibration: { ...calibrationDefaults, ...record?.value.calibration },
+    templates: record?.value.templates || [],
+    qualityRules: record?.value.qualityRules || [],
+  });
   return (
     <form
       onSubmit={(e) => {
@@ -929,6 +1242,67 @@ function StationForm({ record, pending, save }) {
           set={set}
         />
       </div>
+      <h3>Meteorologiske beregninger</h3>
+      <div className="form-grid">
+        {[
+          ['windWindowSeconds', 'Middelvind: tidsvindu (sekunder)', 60, 3600, 1],
+          ['maximumGapSeconds', 'Største datagap som tidsmidles (sekunder)', 3, 300, 1],
+          ['minimumCoverage', 'Minste datadekning (0,5–1)', 0.5, 1, 0.01],
+          ['windHeightM', 'Vindmålerens høyde over bakken (m)', 0.5, 100, 0.1],
+          ['heatingBaseC', 'Grunnlag for varme-/kjølegraddager (°C)', -20, 40, 'any'],
+          ['growingBaseC', 'Grunnlag for vekstgraddager (°C)', -20, 40, 0.1],
+          ['growingCeilingC', 'Øvre grense for vekstgraddager (°C)', -10, 60, 0.1],
+          ['sunshineThresholdWm2', 'Solskinnsestimat: grense for globalstråling (W/m²)', 1, 1500, 1],
+          ['rainDayStartHour', 'Nedbørsdøgn i rapporter: starttime (Oslo)', 0, 23, 1],
+          ['wetDayThresholdMm', 'Grense for vått døgn (mm)', 0.01, 100, 0.01],
+        ].map(([name, label, min, max, step]) => (
+          <Field
+            key={name}
+            name={name}
+            label={label}
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            item={item.meteorology}
+            set={(meteorology) => set({ ...item, meteorology })}
+            required
+          />
+        ))}
+      </div>
+      <p className="muted small">
+        Kontroller vindmålerens faktiske høyde. Solskinn fra globalstråling er et estimat. Beregninger med
+        utilstrekkelig datadekning vises som manglende.
+      </p>
+      <h3>Kalibrering</h3>
+      <div className="form-grid">
+        {[
+          ['temperatureOffsetC', 'Temperaturkorreksjon (°C)', -20, 20],
+          ['humidityOffsetPct', 'Fuktighetskorreksjon (prosentpoeng)', -50, 50],
+          ['pressureOffsetHpa', 'Trykkorreksjon (hPa)', -100, 100],
+          ['windFactor', 'Faktor for vindhastighet', 0.01, 10],
+          ['windDirectionOffsetDeg', 'Retningskorreksjon (grader)', -360, 360],
+          ['solarFactor', 'Faktor for solstråling', 0.01, 10],
+        ].map(([name, label, min, max]) => (
+          <Field
+            key={name}
+            name={name}
+            label={label}
+            type="number"
+            min={min}
+            max={max}
+            step="0.01"
+            item={item.calibration}
+            set={(calibration) => set({ ...item, calibration })}
+            required
+          />
+        ))}
+      </div>
+      <p className="muted small">
+        Råmålinger beholdes. Kalibrering gjelder nye målinger etter «Gjør gjeldende».
+      </p>
+      <TemplateEditor templates={item.templates} set={(templates) => set({ ...item, templates })} />
+      <QualityRulesEditor rules={item.qualityRules} set={(qualityRules) => set({ ...item, qualityRules })} />
       <label className="checkbox">
         <input
           type="checkbox"
@@ -941,6 +1315,59 @@ function StationForm({ record, pending, save }) {
         Lagre som utkast
       </button>
     </form>
+  );
+}
+function FirmwareManager({ releases, stations, pending, upload, deploy }) {
+  return (
+    <section className="panel settings-form">
+      <h2>Signerte firmwareutgivelser</h2>
+      <p>
+        Last opp en signert utgivelse for riktig stasjon og miljø. En test må bekreftes innen fristen etter at
+        enheten har startet og sendt gyldige sensordata.
+      </p>
+      <label>
+        Utgivelsesfil (JSON)
+        <input
+          type="file"
+          accept="application/json,.json"
+          disabled={pending}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) upload(file);
+            e.target.value = '';
+          }}
+        />
+      </label>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Stasjon</th>
+              <th>Versjon</th>
+              <th>Sekvens</th>
+              <th>Størrelse</th>
+              <th>Handling</th>
+            </tr>
+          </thead>
+          <tbody>
+            {releases.map((release) => (
+              <tr key={release.id}>
+                <td>{stations.find((s) => s.value.id === release.station_id)?.value.name}</td>
+                <td>{release.manifest.version}</td>
+                <td>{release.manifest.sequence}</td>
+                <td>{Math.ceil(release.manifest.size / 1024)} kB</td>
+                <td>
+                  <button disabled={pending} onClick={() => deploy(release.id)}>
+                    Opprett testutkast
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!releases.length && <p className="empty">Ingen utgivelser er lastet opp.</p>}
+    </section>
   );
 }
 function DeviceForm({ record, pending, save }) {
@@ -1019,7 +1446,7 @@ function DeviceForm({ record, pending, save }) {
   );
 }
 function Settings({ record, pending, save }) {
-  const [item, set] = useState(record.value),
+  const [item, set] = useState({ backupIntervalHours: 24, backupKeepCount: 30, ...record.value }),
     [directory, setDirectory] = useState(JSON.stringify(record.value.directory, null, 2)),
     [localError, setLocalError] = useState('');
   return (
@@ -1053,6 +1480,24 @@ function Settings({ record, pending, save }) {
           set={set}
         />
         <Field label="Behold målinger (dager)" name="retentionDays" type="number" item={item} set={set} />
+        <Field
+          label="Automatisk databasebackup (timer; 0 deaktiverer)"
+          name="backupIntervalHours"
+          type="number"
+          min="0"
+          max="168"
+          item={item}
+          set={set}
+        />
+        <Field
+          label="Antall fullførte databasebackuper som beholdes"
+          name="backupKeepCount"
+          type="number"
+          min="2"
+          max="365"
+          item={item}
+          set={set}
+        />
         <Field
           label="Varsle ved eldre data enn (sekunder)"
           name="warningSeconds"
@@ -1171,7 +1616,622 @@ function Promotion({ incoming, exporting, target, pending, submit }) {
     </>
   );
 }
-function Reports({ stations, api, onError }) {
+function ReadinessPanel({ api, onError }) {
+  const [report, setReport] = useState(null),
+    [selected, setSelected] = useState(''),
+    [note, setNote] = useState(''),
+    [passed, setPassed] = useState(false),
+    [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const reload = () =>
+      api('/readiness')
+        .then((data) => active && setReport(data))
+        .catch((e) => active && onError(e.message));
+    reload();
+    const timer = setInterval(reload, 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+  if (!report) return <p>Kontrollerer produksjonsstatus …</p>;
+  return (
+    <section className="panel settings-form">
+      <h2>Produksjonsstatus</h2>
+      <p className={report.ready ? 'notice' : 'muted'}>
+        {report.ready ? 'Produksjonskontrollene er godkjent.' : 'Produksjonskontrollene er ikke fullført.'}{' '}
+        Miljø: {report.environment}.
+      </p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Kontroll</th>
+              <th>Status</th>
+              <th>Merknad</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.checks.map((check) => (
+              <tr key={check.id}>
+                <td>{check.label}</td>
+                <td>{check.passed ? 'Godkjent' : 'Gjenstår'}</td>
+                <td>
+                  {check.detail?.note ||
+                    (check.detail?.status === 'unverified' ? 'Ikke verifisert i målmiljøet' : '')}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <details>
+        <summary>Registrer en utført akseptanseprøve</summary>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            try {
+              setReport(
+                await api('/readiness/evidence', {
+                  checkId: selected,
+                  configurationHash: report.configurationHash,
+                  passed,
+                  note,
+                }),
+              );
+              setNote('');
+              setPassed(false);
+            } catch (e) {
+              onError(e.message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <label>
+            Utført prøve
+            <select required value={selected} onChange={(e) => setSelected(e.target.value)}>
+              <option value="">Velg prøve</option>
+              {report.checks
+                .filter((check) => check.detail?.verification === 'manual')
+                .map((check) => (
+                  <option key={check.id} value={check.id}>
+                    {check.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Faktisk utførelse, resultat og hvor dokumentasjonen finnes
+            <textarea
+              required
+              minLength="20"
+              maxLength="2000"
+              rows="4"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={passed} onChange={(e) => setPassed(e.target.checked)} />
+            Prøven er gjennomført og bestått
+          </label>
+          <button className="primary" disabled={busy}>
+            Registrer resultat
+          </button>
+        </form>
+      </details>
+    </section>
+  );
+}
+function QualityRulesEditor({ rules, set }) {
+  return (
+    <section>
+      <h3>Datakvalitet</h3>
+      {rules.map((rule, index) => (
+        <div className="form-grid" key={index}>
+          <label>
+            Måling
+            <select
+              value={rule.metric}
+              onChange={(e) => set(rules.map((r, i) => (i === index ? { ...r, metric: e.target.value } : r)))}
+            >
+              {['temperatureC', 'humidityPct', 'pressureHpa', 'windSpeedMs', 'solarWm2', 'uvIndex'].map(
+                (key) => (
+                  <option key={key} value={key}>
+                    {alarmMetrics[key]}
+                  </option>
+                ),
+              )}
+            </select>
+          </label>
+          <label>
+            Største endring per minutt (tomt deaktiverer)
+            <input
+              type="number"
+              min="0.001"
+              step="any"
+              value={rule.maximumChangePerMinute ?? ''}
+              onChange={(e) =>
+                set(
+                  rules.map((r, i) =>
+                    i === index
+                      ? {
+                          ...r,
+                          maximumChangePerMinute: e.target.value === '' ? null : Number(e.target.value),
+                        }
+                      : r,
+                  ),
+                )
+              }
+            />
+          </label>
+          <Field
+            label="Varsle uendret verdi etter (sekunder; 0 deaktiverer)"
+            name="stuckSeconds"
+            type="number"
+            min="0"
+            max="604800"
+            item={rule}
+            set={(updated) => set(rules.map((r, i) => (i === index ? updated : r)))}
+          />
+          <label>
+            Ved avvik
+            <select
+              value={rule.action}
+              onChange={(e) => set(rules.map((r, i) => (i === index ? { ...r, action: e.target.value } : r)))}
+            >
+              <option value="flag">Behold og merk verdien</option>
+              <option value="missing">Behandle som manglende</option>
+            </select>
+          </label>
+          <button type="button" onClick={() => set(rules.filter((_, i) => i !== index))}>
+            Fjern kvalitetsregel
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        disabled={rules.length >= 6}
+        onClick={() =>
+          set([
+            ...rules,
+            { metric: 'temperatureC', maximumChangePerMinute: null, stuckSeconds: 0, action: 'flag' },
+          ])
+        }
+      >
+        Legg til kvalitetsregel
+      </button>
+    </section>
+  );
+}
+function TemplateEditor({ templates, set }) {
+  return (
+    <section>
+      <h3>Egne eksportfiler</h3>
+      {templates.map((template, index) => (
+        <div className="settings-form" key={index}>
+          <label>
+            Filnavn
+            <input
+              required
+              pattern="[a-z0-9](?:[a-z0-9]|_|-)*[.](?:txt|csv|html)"
+              value={template.name}
+              onChange={(e) =>
+                set(templates.map((t, i) => (i === index ? { ...t, name: e.target.value } : t)))
+              }
+            />
+          </label>
+          <label>
+            Innhold
+            <textarea
+              rows="4"
+              value={template.content}
+              onChange={(e) =>
+                set(templates.map((t, i) => (i === index ? { ...t, content: e.target.value } : t)))
+              }
+            />
+          </label>
+          <button type="button" onClick={() => set(templates.filter((_, i) => i !== index))}>
+            Fjern fil
+          </button>
+        </div>
+      ))}
+      <p className="muted small">
+        Bruk for eksempel {'{{station.name}}'} og {'{{weather.temp}}'}. HTML-verdier escapes automatisk.
+      </p>
+      <button
+        type="button"
+        disabled={templates.length >= 12}
+        onClick={() =>
+          set([
+            ...templates,
+            {
+              name: `weather-${templates.length + 1}.txt`,
+              content: '{{station.name}}: {{weather.temp}} °C\n',
+            },
+          ])
+        }
+      >
+        Legg til eksportfil
+      </button>
+    </section>
+  );
+}
+function AlarmManager({ data, stations, operator, pending, configure, acknowledge }) {
+  return (
+    <>
+      <section className="panel">
+        <h2>Alarmregler</h2>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Stasjon</th>
+                <th>Regler</th>
+                <th>Aktive</th>
+                <th>Handling</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.configurations.map((record) => (
+                <tr key={record.scope}>
+                  <td>{stations.find((s) => s.value.id === record.value.stationId)?.value.name}</td>
+                  <td>{record.value.rules.length}</td>
+                  <td>
+                    {data.states.filter((s) => s.station_id === record.value.stationId && s.active).length}
+                  </td>
+                  <td>{operator && <button onClick={() => configure(record)}>Endre alarmregler</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="panel">
+        <h2>Alarmhistorikk</h2>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Tid</th>
+                <th>Stasjon</th>
+                <th>Alarm</th>
+                <th>Hendelse</th>
+                <th>Verdi</th>
+                <th>Kvittering</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.events.map((event) => (
+                <tr key={event.id}>
+                  <td>{time(event.at)}</td>
+                  <td>{stations.find((s) => s.value.id === event.station_id)?.value.name}</td>
+                  <td>{event.name}</td>
+                  <td>
+                    {{
+                      activated: 'Utløst',
+                      cleared: 'Normalisert',
+                      disabled: 'Deaktivert',
+                      removed: 'Fjernet',
+                    }[event.kind] || event.kind}
+                  </td>
+                  <td>{value(event.value)}</td>
+                  <td>
+                    {event.acknowledged_at ? (
+                      time(event.acknowledged_at)
+                    ) : operator ? (
+                      <button disabled={pending} onClick={() => acknowledge(event.id)}>
+                        Kvitter
+                      </button>
+                    ) : (
+                      'Ikke kvittert'
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!data.events.length && <p className="empty">Ingen alarmhendelser.</p>}
+      </section>
+    </>
+  );
+}
+function AlarmForm({ record, pending, save }) {
+  const [item, set] = useState(structuredClone(record.value));
+  const change = (index, patch) =>
+    set({ ...item, rules: item.rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)) });
+  return (
+    <form
+      className="settings-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save(item);
+      }}
+    >
+      <h2 id="modal-title">Alarmregler</h2>
+      {item.rules.map((rule, index) => (
+        <fieldset key={rule.id}>
+          <legend>{rule.name || 'Ny alarm'}</legend>
+          <div className="form-grid">
+            <Field label="Navn" name="name" item={rule} set={(updated) => change(index, updated)} required />
+            <label>
+              Måling
+              <select value={rule.metric} onChange={(e) => change(index, { metric: e.target.value })}>
+                {Object.entries(alarmMetrics).map(([key, label]) => (
+                  <option value={key} key={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Tilstand
+              <select value={rule.comparison} onChange={(e) => change(index, { comparison: e.target.value })}>
+                <option value="above">Over grensen</option>
+                <option value="below">Under grensen</option>
+                <option value="missing">Mangler verdi</option>
+              </select>
+            </label>
+            {rule.comparison !== 'missing' && (
+              <>
+                <Field
+                  label="Grenseverdi"
+                  name="threshold"
+                  type="number"
+                  step="any"
+                  item={rule}
+                  set={(updated) => change(index, updated)}
+                  required
+                />
+                <Field
+                  label="Hysterese"
+                  name="hysteresis"
+                  type="number"
+                  min="0"
+                  step="any"
+                  item={rule}
+                  set={(updated) => change(index, updated)}
+                  required
+                />
+              </>
+            )}
+            <Field
+              label="Forsinkelse før alarm (sekunder)"
+              name="delaySeconds"
+              type="number"
+              min="0"
+              max="86400"
+              item={rule}
+              set={(updated) => change(index, updated)}
+              required
+            />
+            <Field
+              label="Forsinkelse før normalisering (sekunder)"
+              name="clearDelaySeconds"
+              type="number"
+              min="0"
+              max="86400"
+              item={rule}
+              set={(updated) => change(index, updated)}
+              required
+            />
+          </div>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={rule.enabled}
+              onChange={(e) => change(index, { enabled: e.target.checked })}
+            />
+            Aktiv regel
+          </label>
+          <button
+            type="button"
+            onClick={() => set({ ...item, rules: item.rules.filter((_, i) => i !== index) })}
+          >
+            Fjern regel
+          </button>
+        </fieldset>
+      ))}
+      <div className="actions">
+        <button
+          type="button"
+          disabled={item.rules.length >= 50}
+          onClick={() =>
+            set({
+              ...item,
+              rules: [
+                ...item.rules,
+                {
+                  id: crypto.randomUUID(),
+                  name: 'Ny alarm',
+                  enabled: true,
+                  metric: 'temperatureC',
+                  comparison: 'below',
+                  threshold: 0,
+                  hysteresis: 1,
+                  delaySeconds: 60,
+                  clearDelaySeconds: 60,
+                },
+              ],
+            })
+          }
+        >
+          Legg til alarm
+        </button>
+        <button className="primary" disabled={pending}>
+          Lagre som utkast
+        </button>
+      </div>
+    </form>
+  );
+}
+function HistoryImport({ api, onError }) {
+  const [batch, setBatch] = useState(null),
+    [preview, setPreview] = useState(null),
+    [result, setResult] = useState(null),
+    [busy, setBusy] = useState(false);
+  const run = async (apply) => {
+    setBusy(true);
+    try {
+      const result = await api('/history-import', {
+        ...batch,
+        dryRun: !apply,
+        ...(apply ? { previewId: preview.previewId } : {}),
+      });
+      if (apply) {
+        setResult(result);
+        setPreview(null);
+      } else setPreview(result);
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <details>
+      <summary>Importer historikk</summary>
+      <p>
+        Velg en Weather Gateway-historikkpakke med UTC-tider. Forhåndsvisning utløper etter
+        bekreftelsesfristen. Importen skriver til lokal historikk og aggregater.
+      </p>
+      <input
+        type="file"
+        accept=".json,application/json"
+        disabled={busy}
+        aria-label="Historikkpakke"
+        onChange={async (e) => {
+          try {
+            const file = e.target.files?.[0];
+            setBatch(file ? JSON.parse(await file.text()) : null);
+            setPreview(null);
+            setResult(null);
+          } catch {
+            onError('Historikkpakken må være gyldig JSON.');
+          }
+        }}
+      />
+      <div className="actions">
+        <button disabled={!batch || busy} onClick={() => run(false)}>
+          Forhåndsvis import
+        </button>
+        {preview && (
+          <button className="primary" disabled={busy} onClick={() => run(true)}>
+            Gjør import av {preview.records} målinger gjeldende
+          </button>
+        )}
+      </div>
+      {preview && (
+        <p>
+          {preview.records} målinger er validert. Frist: {time(preview.expiresAt)}.
+        </p>
+      )}
+      {result && (
+        <p role="status">
+          Importert: {result.inserted}. Duplikater: {result.duplicates}. Feil: {result.failed.length}.
+        </p>
+      )}
+    </details>
+  );
+}
+function ClimateSummary({ climate }) {
+  const fmt = (v, suffix) => value(typeof v === 'number' ? v.toFixed(2) : v, suffix);
+  return (
+    <div className="stats-grid">
+      <Stat
+        label="Middelvind"
+        number={fmt(climate.means.windSpeedMs, ' m/s')}
+        detail={`Datadekning ${((climate.coverage.windSpeedMs || 0) * 100).toFixed(1)} %`}
+      />
+      <Stat label="Vindrun" number={fmt(climate.windRunKm, ' km')} detail="Tidsintegrert vindhastighet" />
+      <Stat
+        label="Varmegraddager"
+        number={fmt(climate.heatingDegreeDays, ' °C·d')}
+        detail={climate.complete ? 'Avsluttet døgn' : 'Døgnet er ikke avsluttet'}
+      />
+      <Stat
+        label="Referansefordampning"
+        number={fmt(climate.referenceEtMm, ' mm')}
+        detail={
+          climate.referenceEtMissingInputs.length
+            ? 'Nødvendige inngangsdata mangler'
+            : 'FAO-56 Penman–Monteith'
+        }
+      />
+    </div>
+  );
+}
+function WeatherChart({ hourly }) {
+  const [metric, setMetric] = useState('temperatureC');
+  const good = hourly.filter((row) => typeof row[metric] === 'number');
+  if (!hourly.length) return <p className="muted">Ingen gyldige målinger for grafen.</p>;
+  const low = good.length ? Math.min(...good.map((r) => r[metric])) : 0,
+    high = good.length ? Math.max(...good.map((r) => r[metric])) : 1,
+    range = Math.max(1, high - low),
+    begin = Date.parse(hourly[0].at),
+    finish = Date.parse(hourly.at(-1).at),
+    span = Math.max(3600000, finish - begin);
+  const x = (r) => 50 + ((Date.parse(r.at) - begin) * 680) / span,
+    y = (r) => 190 - ((r[metric] - low) * 150) / range;
+  const paths = [];
+  let path = '';
+  for (const row of hourly) {
+    if (typeof row[metric] !== 'number') {
+      if (path) paths.push(path);
+      path = '';
+    } else path += `${path ? 'L' : 'M'}${x(row)},${y(row)} `;
+  }
+  if (path) paths.push(path);
+  return (
+    <section>
+      <label>
+        Graf
+        <select aria-label="Graf" value={metric} onChange={(e) => setMetric(e.target.value)}>
+          {[
+            ['temperatureC', 'Temperatur (°C)'],
+            ['humidityPct', 'Fuktighet (%)'],
+            ['windSpeedMs', 'Vind (m/s)'],
+            ['pressureHpa', 'Trykk (hPa)'],
+          ].map(([key, label]) => (
+            <option key={key} value={key}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <svg viewBox="0 0 760 230" role="img" aria-label={`Historikk for ${metric}`}>
+        <path d="M50 20V190H730" fill="none" stroke="currentColor" />
+        {paths.map((d, i) => (
+          <path key={i} d={d} fill="none" stroke="#168e88" strokeWidth="2" />
+        ))}
+        {good.map((row) => (
+          <circle key={row.at} cx={x(row)} cy={y(row)} r="3" fill="#168e88">
+            <title>
+              {time(row.at)}: {row[metric].toFixed(2)}
+            </title>
+          </circle>
+        ))}
+        <text x="5" y="40" fill="currentColor" fontSize="12">
+          {(low + range).toFixed(1)}
+        </text>
+        <text x="5" y="190" fill="currentColor" fontSize="12">
+          {low.toFixed(1)}
+        </text>
+        <text x="50" y="217" fill="currentColor" fontSize="12">
+          {time(hourly[0].at)}
+        </text>
+        <text x="500" y="217" fill="currentColor" fontSize="12">
+          {time(hourly.at(-1).at)}
+        </text>
+      </svg>
+    </section>
+  );
+}
+function Reports({ stations, api, onError, admin }) {
   const [station, setStation] = useState(stations[0]?.value.id || ''),
     [date, setDate] = useState(
       new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Oslo' }).format(new Date()),
@@ -1182,6 +2242,7 @@ function Reports({ stations, api, onError }) {
   return (
     <section className="panel settings-form">
       <h2>Rapporter og historikk</h2>
+      {admin && <HistoryImport api={api} onError={onError} />}
       <form
         className="report-controls"
         onSubmit={async (e) => {
@@ -1190,9 +2251,11 @@ function Reports({ stations, api, onError }) {
           try {
             setReport(
               await api(
-                mode === 'day'
-                  ? `/history/${station}/${date}`
-                  : `/reports/${station}/${date.slice(0, mode === 'month' ? 7 : 4)}`,
+                mode === 'records'
+                  ? `/records/${station}`
+                  : mode === 'day'
+                    ? `/history/${station}/${date}`
+                    : `/reports/${station}/${date.slice(0, mode === 'month' ? 7 : 4)}`,
               ),
             );
           } catch (e) {
@@ -1223,7 +2286,8 @@ function Reports({ stations, api, onError }) {
           >
             <option value="day">Døgn</option>
             <option value="month">Måned</option>
-            <option value="year">år</option>
+            <option value="year">År</option>
+            <option value="records">Alle rekorder</option>
           </select>
         </label>
         <label>
@@ -1238,11 +2302,46 @@ function Reports({ stations, api, onError }) {
         <>
           <button
             onClick={() =>
-              download(`rapport-${report.stationId}-${report.date || report.period}.json`, report)
+              download(
+                `rapport-${report.stationId}-${report.date || report.period || 'rekorder'}.json`,
+                report,
+              )
             }
           >
             Last ned rapport
           </button>
+          {report.period && (
+            <a href={`/api/report-text/${report.stationId}/${report.period}`} download>
+              Last ned tekstrapport
+            </a>
+          )}
+          {report.hourly && <WeatherChart hourly={report.hourly} />}
+          {report.metrics && (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Måling</th>
+                    <th>Laveste verdi</th>
+                    <th>Tidspunkt</th>
+                    <th>Høyeste verdi</th>
+                    <th>Tidspunkt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(report.metrics).map(([metric, record]) => (
+                    <tr key={metric}>
+                      <td>{alarmMetrics[metric] || metric}</td>
+                      <td>{record.minimum.toFixed(2)}</td>
+                      <td>{time(record.minAt)}</td>
+                      <td>{record.maximum.toFixed(2)}</td>
+                      <td>{time(record.maxAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           {report.summary && (
             <>
               <div className="stats-grid">
@@ -1258,6 +2357,7 @@ function Reports({ stations, api, onError }) {
                   detail="Observerte data"
                 />
               </div>
+              {report.climate && <ClimateSummary climate={report.climate} />}
               {report.astronomy && (
                 <p className="muted">
                   Soloppgang: {time(report.astronomy.sunrise)} · Solnedgang: {time(report.astronomy.sunset)}

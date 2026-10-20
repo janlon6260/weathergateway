@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import { meteorologyDefaults, calibrationDefaults } from '../shared/meteorology-settings.js';
+import { alarmMetrics } from '../shared/alarm-metrics.js';
+export { meteorologyDefaults };
+import { databaseColumns, optionalDatabaseMetrics } from '../shared/database-columns.js';
+export { databaseColumns };
 
 export const id = z.string().uuid();
 export const role = z.enum(['viewer', 'operator', 'administrator']);
@@ -65,12 +70,29 @@ export const gatewaySchema = z
     sessionIdleMinutes: z.number().int().min(5).max(120).default(30),
     sessionAbsoluteHours: z.number().int().min(1).max(24).default(8),
     retentionDays: z.number().int().min(7).max(3650).default(365),
+    backupIntervalHours: z.number().int().min(0).max(168).default(24),
+    backupKeepCount: z.number().int().min(2).max(365).default(30),
     warningSeconds: z.number().int().min(10).max(86400).default(180),
     downSeconds: z.number().int().min(20).max(172800).default(300),
     directory: directorySchema,
   })
   .strict()
   .refine((v) => v.downSeconds > v.warningSeconds, 'Nedetidsgrense må være større enn varslingsgrense');
+export const meteorologySchema = z
+  .object({
+    windWindowSeconds: z.number().int().min(60).max(3600),
+    maximumGapSeconds: z.number().int().min(3).max(300),
+    minimumCoverage: z.number().min(0.5).max(1),
+    windHeightM: z.number().min(0.5).max(100),
+    heatingBaseC: z.number().min(-20).max(40),
+    growingBaseC: z.number().min(-20).max(40),
+    growingCeilingC: z.number().min(-10).max(60),
+    sunshineThresholdWm2: z.number().min(1).max(1500),
+    rainDayStartHour: z.number().int().min(0).max(23),
+    wetDayThresholdMm: z.number().positive().max(100),
+  })
+  .strict()
+  .refine((v) => v.growingCeilingC > v.growingBaseC, 'Øvre grense må være større enn vekstgrunnlaget');
 export const stationSchema = z
   .object({
     id,
@@ -83,8 +105,117 @@ export const stationSchema = z
     elevationM: z.number().min(-500).max(9000),
     exportName: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,60}\.txt$/),
     rainCounterMmPerUnit: z.number().positive().max(10).default(0.2),
+    meteorology: meteorologySchema.default(meteorologyDefaults),
+    calibration: z
+      .object({
+        temperatureOffsetC: z.number().min(-20).max(20),
+        humidityOffsetPct: z.number().min(-50).max(50),
+        pressureOffsetHpa: z.number().min(-100).max(100),
+        windFactor: z.number().positive().max(10),
+        windDirectionOffsetDeg: z.number().min(-360).max(360),
+        solarFactor: z.number().positive().max(10),
+      })
+      .strict()
+      .default(calibrationDefaults),
+    qualityRules: z
+      .array(
+        z
+          .object({
+            metric: z.enum([
+              'temperatureC',
+              'humidityPct',
+              'pressureHpa',
+              'windSpeedMs',
+              'solarWm2',
+              'uvIndex',
+            ]),
+            maximumChangePerMinute: z.number().positive().max(100000).nullable(),
+            stuckSeconds: z.number().int().min(0).max(604800),
+            action: z.enum(['flag', 'missing']),
+          })
+          .strict(),
+      )
+      .max(6)
+      .refine(
+        (rules) => new Set(rules.map((r) => r.metric)).size === rules.length,
+        'Bare én kvalitetsregel per måling er tillatt',
+      )
+      .default([]),
+    templates: z
+      .array(
+        z
+          .object({
+            name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,60}\.(?:txt|csv|html)$/),
+            content: z.string().min(1).max(32000),
+          })
+          .strict(),
+      )
+      .max(12)
+      .default([]),
   })
   .strict();
+const columnName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/);
+export const databaseSchema = z
+  .object({
+    stationId: id,
+    enabled: z.boolean().default(false),
+    host: z.union([host, z.literal('')]).default(''),
+    port: z.number().int().min(1).max(65535).default(3306),
+    transport: z.preprocess(
+      (value) => (value === 'vpn' ? 'lan' : value),
+      z.enum(['lan', 'tls']).default('lan'),
+    ),
+    database: z
+      .string()
+      .max(64)
+      .regex(/^[A-Za-z0-9_-]*$/)
+      .default(''),
+    user: z.string().max(128).default(''),
+    passwordEnv: z
+      .string()
+      .regex(/^WG_DB_PASSWORD(?:_[A-Z0-9_]{1,48})?$/)
+      .default('WG_DB_PASSWORD'),
+    stationKey: z.string().min(1).max(100),
+    stationNameColumn: columnName.nullable().default(null),
+    intervalSeconds: z.number().int().min(1).max(86400).default(60),
+    windUnit: z.enum(['kmh', 'ms']).default('kmh'),
+    columns: z
+      .object(
+        Object.fromEntries([
+          ...Object.entries(databaseColumns).map(([key, value]) => [
+            key,
+            columnName.nullable().default(value),
+          ]),
+          ...Object.keys(optionalDatabaseMetrics).map((key) => [key, columnName.nullable().default(null)]),
+        ]),
+      )
+      .strict()
+      .default({
+        ...databaseColumns,
+        ...Object.fromEntries(Object.keys(optionalDatabaseMetrics).map((key) => [key, null])),
+      }),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const names = Object.values(value.columns)
+      .filter(Boolean)
+      .map((name) => name.toLowerCase());
+    const allNames = [...names, ...(value.stationNameColumn ? [value.stationNameColumn.toLowerCase()] : [])];
+    if (
+      new Set(allNames).size !== allNames.length ||
+      allNames.some((name) => ['id', 'station_id', 'date', 'time'].includes(name))
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['columns'],
+        message: 'Kolonner må være unike og kan ikke erstatte identitet eller tid',
+      });
+    if (value.enabled && (!value.host || !value.database || !value.user || !names.length))
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Aktiv databaseskriving krever vert, database, bruker og målekolonner',
+      });
+  });
 const gpio = z
   .number()
   .int()
@@ -158,6 +289,9 @@ export const telemetrySchema = z
     sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     observedAt: z.string().datetime({ offset: true }),
     firmware: z.string().max(80),
+    firmwareReleaseId: id.optional(),
+    timeQuality: z.enum(['ntp', 'mappedWithinBoot']).optional(),
+    certificateId: id.optional(),
     sensorContact: z.boolean(),
     measurements: z
       .object({
@@ -179,6 +313,7 @@ export const telemetrySchema = z
         rainLastHourMm: optionalNumber(0, 5000),
         rainLast24HoursMm: optionalNumber(0, 10000),
         rainLast15MinutesMm: optionalNumber(0, 5000),
+        soilTemperatureC: optionalNumber(-40, 85),
       })
       .strict(),
     configurationHash: z
@@ -222,8 +357,43 @@ export const ackSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
     message: z.string().max(200).optional(),
+    certificateId: id.optional(),
+    firmwareReleaseId: id.optional(),
   })
   .strict();
+
+export const firmwareManifestSchema = z
+  .object({
+    format: z.literal('wg-firmware-1'),
+    stationId: id,
+    environment: z.enum(['production', 'development', 'test']),
+    version: z
+      .string()
+      .regex(/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/)
+      .max(64),
+    sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    size: z.number().int().min(1024).max(0x180000),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+export const firmwareUpdateSchema = z.object({ stationId: id, releaseId: id.nullable() }).strict();
+export const alarmRuleSchema = z
+  .object({
+    id,
+    name: z.string().trim().min(1).max(100),
+    enabled: z.boolean(),
+    metric: z.enum(Object.keys(alarmMetrics)),
+    comparison: z.enum(['above', 'below', 'missing']),
+    threshold: z.number().finite().min(-100000).max(100000),
+    hysteresis: z.number().min(0).max(10000),
+    delaySeconds: z.number().int().min(0).max(86400),
+    clearDelaySeconds: z.number().int().min(0).max(86400),
+  })
+  .strict();
+export const alarmsSchema = z
+  .object({ stationId: id, rules: z.array(alarmRuleSchema).max(50) })
+  .strict()
+  .refine((v) => new Set(v.rules.map((r) => r.id)).size === v.rules.length, 'Alarm-ID må være unik');
 
 export function validateScope(scope, payload) {
   if (scope === 'gateway') return gatewaySchema.parse(payload);
@@ -233,11 +403,28 @@ export function validateScope(scope, payload) {
   if (scope.startsWith('station:')) {
     const v = stationSchema.parse(payload);
     if (v.id !== scope.slice(8)) invalid('Stasjonsidentitet kan ikke endres');
+    if (new Set([v.exportName, ...v.templates.map((t) => t.name)]).size !== v.templates.length + 1)
+      invalid('Filnavn må være unike for stasjonen');
     return v;
   }
   if (scope.startsWith('device:')) {
     const v = deviceSchema.parse(payload);
     if (v.stationId !== scope.slice(7)) invalid('Enhetsidentitet kan ikke endres');
+    return v;
+  }
+  if (scope.startsWith('database:')) {
+    const v = databaseSchema.parse(payload);
+    if (v.stationId !== scope.slice(9)) invalid('Databasekoblingens stasjon kan ikke endres');
+    return v;
+  }
+  if (scope.startsWith('firmware:')) {
+    const v = firmwareUpdateSchema.parse(payload);
+    if (v.stationId !== scope.slice(9)) invalid('Firmware gjelder en annen stasjon');
+    return v;
+  }
+  if (scope.startsWith('alarms:')) {
+    const v = alarmsSchema.parse(payload);
+    if (v.stationId !== scope.slice(7)) invalid('Alarmene gjelder en annen stasjon');
     return v;
   }
   invalid('Ukjent konfigurasjonsområde');

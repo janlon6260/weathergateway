@@ -1,38 +1,49 @@
-# Leveransestatus
+# Leveransestatus – 20. oktober 2026
 
-Arbeidet er byttet fra den første Python-kjernen til Node/Express og React. Server, frontend, utplassering og firmware ligger i samme prosjekt. Dette dokumentet skiller implementasjon fra verifikasjon; en grønn enhetstest betyr ikke at en fysisk stasjon eller produksjonsinstallasjon er godkjent.
+React, Node/Express, Docker-oppsett og ESP-IDF-firmware er implementert i dette prosjektet. Denne leveransen er lokalt verifisert; den er **ikke produksjonsgodkjent på deres utstyr**. Ingen Docker-host eller fysisk ESP32 er tilgjengelig i denne økten. Det er ikke utført flashing, eFuse-endring, produksjons-DDL eller produksjonsskriving.
 
-## Implementert og lokalt kontrollert
+## Implementert
 
-Verifisert 19. oktober 2026: **75 av 75 backendtester passerte**, React-produksjonsbygg passerte og adminpanelet er prøvd i WebKit på desktop/mobil. RF-enhetsskjemaet er også nettleserprøvd, med sender-ID som utkast uten påvirkning av aktiv konfigurasjon. ESP32-firmwaren med RFM69HCW-driver er kompilert med ESP-IDF 6.0.2, Espressif MQTT 1.1.0 og cJSON 1.7.19~2. Testbygget er **1 025 504 byte** og har 35 % ledig plass i hver app-partisjon på 1,5 MB. Bygget bruker midlertidige utviklingsnøkler for `.invalid`-domene og er ikke produksjonsfirmware. Ingen fysisk enhet er flashet.
+- Intern AD/LDAPS-innlogging, eksisterende grupper til roller, sesjoner, CSRF, revisjonskontroll og audit. Brukeren har bekreftet fungerende AD-innlogging.
+- React-panel med en/flere/alle stasjoner, sanntidsdata, historikkgrafer, rekorder, kalibrering, kvalitetsregler, alarmregler og alarmhistorikk.
+- Separate utviklings-/produksjonsstakker og data. Miljøbytte og eksplisitt overføring til produksjonsutkast. Ubekreftede innstillinger brukes ikke av SQL-levering, kalibrering, alarmregler eller backupplan.
+- Vedvarende test/bekreftelse/tilbakeføring, som standard 300 sekunder, inkludert lokal ESP32-frist og uavhengig konfigurasjonsvakt.
+- Direkte Davis ISS-mottak via RFM69HCW/EU868, alternativ LOOP/LOOP2, CRC, sender-ID, feltvise måletider, duplikater og manglende sensorer. Lufttrykk er etter avtale manglende.
+- Værindekser, tidsvektet middelvind og retning, vindrun/vindrose, regnperioder, graddager, FAO-56 referanse-ET, astronomi og solstrålingsestimat. Se [metoder og nødvendige innganger](calculations.md).
+- Eksisterende Sunnmørsvær-filer og Socket.IO-hendelser, atomiske egendefinerte tekst-/CSV-/HTML-maler, klimautdata og sporbar historikkimport med forhåndsvisning.
+- MariaDB/MySQL til eksisterende `wx_data`, vedvarende leveringskø, beholdt historikk ved gjentakelse, direkte privat LAN uten krav om VPN/TLS, valgfrie verifiserte TLS-forbindelser og utvidede feltkoblinger.
+- Unike mTLS-identiteter, stasjonsbundet MQTT-ACL, IP- og DNS-SAN, sertifikatsperring og automatisk fjernfornyelse av enhetssertifikater uten å flytte privatnøkkelen.
+- Signert OTA over eksisterende MQTT, ECDSA P-256-manifest, SHA-256, stasjons-/miljøbinding, sekvenskontroll, eksplisitt bekreftelse og tilbakeføring.
+- Varig, avgrenset ESP32-sendekø i slitasjeutjevnet flash. Bare gatewayens kvittering etter varig lagring frigjør køplass. Ukjent måletid arkiveres uten oppdiktet UTC.
+- Konsistente SQLite-backuper med kontrollsum, automatisk plan/retensjon, offline restore og separat offentlig datakopi. Nøkler og hostfiler trenger også beskyttet hostbackup.
+- Produksjonsstatus i panelet: faktisk sensor-/SQL-/kø-/sikkerhetsstatus samt konfigurasjonsbundne manuelle akseptanseprøver. Den blir ikke godkjent av enhetstester alene.
 
-- Express-kontrollplan, React-panel, innlogging og roller med en LDAPS-klient som kontrollerer CA og servernavn. AD-protokolltilfeller er testet med kontrollert klient/testadapter. Reell TLS-forbindelse til organisasjonens AD er prøvd med en betrodd CA fra Windows og godkjent med navnekontroll. Servicebind ble avvist med LDAP 49; reell brukerinnlogging og roller er derfor ikke godkjent. CA-/kontoinnstillinger må holdes riktige i målmiljøet.
-- Mellomromstolerante CIDR-/LDAPS-lister, konkret AD-feilkode uten rå LDAP-meldinger i loggen og ingen automatisk gjentakelse av feil servicelegitimasjon mot flere domenekontrollere. Ubrukt utviklingsoppsett kan korrigere AD-verdiene fra `.env` før første innlogging; bekreftet oppsett og produksjon overskrives ikke.
-- Stasjonsadministrasjon, sanntidsutvalg, gateway-/enhetsutkast, test, bekreftelse, femminuttersfrist, CAS og gjenoppretting ved omstart/klokkefeil.
-- MQTT-payloadvalidering, CRC-dekoding, duplikater, sen ankomst, sensorkontakt, enheter, eksport, aggregater og sommertidsgrenser.
-- Direkte europeisk ISS-radio via Adafruit RFM69HCW, femkanalshopping, sender-ID, RSSI, råpakker, egen måletid/utløp per felt og vedvarende syvbits regnteller. Backendprøver inkluderer publiserte temperatur-/fuktpakker, korrupsjon, feil ID, feil GPIO, kandidatkvittering, gjenoppstart og døgnskifte. [Fysisk radioprøve](davis-radio.md) gjenstår. Lufttrykk står etter avtale som manglende.
-- Meteorologiske metoder listet i beregningskatalogen og astronomi med en versjonert bibliotekavhengighet.
-- Sunnmørsvær-hendelsene `file-content`, `get_trends`, `trend_snapshot`, `trend_update`, `fetch24HourTrend`, `fetchTrendData` og `trendData`. Socket-test bruker faktisk Socket.IO-server og klient med lesetoken.
-- Reell sertifikatutstedelse via OpenSSL, klient-EKU, stasjonsbundne MQTT-tilganger og sperring. Selve Mosquitto-håndhevingen trenger container-/nettverkstest.
-- Konsistent SQLite-backup, SHA-256, integritetstest av kopien, retensjon og separate offentlige værdata uten AD/sesjoner/kommandoer.
-- Frontend bygget og nettleserprøvd med kontrollert AD-adapter, inkludert opprettelse/test/bekreftelse og mobilvisning. Ingen testinnlogging følger den deploybare applikasjonen.
+## Lokal verifikasjon
 
-## Må gjennomføres i målmiljøet
+**117 backendtester bestått, ingen feil eller hoppet over.** Produksjonsavhengighetenes sårbarhetskontroll rapporterte 0 kjente sårbarheter 20. oktober 2026.
 
-1. Bygg og start begge Docker-stackene; kontroller volumrettigheter, helsesjekker, Mosquitto, TLS, nettverk, minnebruk og omstart. Docker/Portainer finnes ikke på denne arbeidsmaskinen.
-2. Sett LDAPS-verdier og AD-CA. Prøv reelle nestede grupper, sperret bruker, CA-/navnefeil, utilgjengelig DC og rolleendring. Ingen passord trengs i chatten.
-3. Bygg med stasjonens faktiske enhetspakke og prøv på fysisk ESP-WROOM-32 og Adafruit RFM69HCW. Direkte ISS og 868 MHz er avklart. Kompilerings- og partisjonskontroll er utført; dette bekrefter ikke faktisk kobling, radiorekkevidde eller frekvenslåsing. Kontroller sender-ID og regnkalibrering. CP2102 er USB-seriebrikken og angir ikke ESP-silisiumrevisjonen.
-4. Prøv strømkutt og tap av forbindelse under test, commit og rollback, inkludert feil gatewayadresse og sertifikat, feil klokke og full disk. Kryssjekk sensortall mot Davis og WD.
-5. Prøv endelig Apache2/DNS/hostbrannmur fra både VPN og et eksternt nett. Adminruter og adminporter skal være utilgjengelige eksternt. Apache2-arbeidet er utsatt etter avtale.
-6. Test gjenoppretting på isolert kopi, nøkkelbackup, sertifikatfornyelse og langtidsbelastning. Fil- og hendelsesformat er undersøkt i kildekoden; full sammenligning mot levende WD-eksporter gjenstår.
+Backendtesten inkluderer en ekte Mosquitto 2.1.2 med mTLS/IP-SAN/ACL og en egen MariaDB 11.4.13 med kopier av alle fire faktiske tabellskjemaer. SQL-migrasjonen er prøvd der, inkludert alle værkolonner, Vatnes ekstra felter og gjentakelse etter usikkert commit-resultat. Ingen produksjonsdata ble endret.
 
-## Funksjoner som fortsatt mangler før hele bestillingen er oppfylt
+React-produksjonsbygg og Edge-test på desktop/mobil er gjennomført. Nettleserprøven dekker kalibreringsutkast, alarmutkast, signert firmwareutkast, historikkimport og produksjonsstatus. AD er erstattet av en kontrollert adapter bare i testoppsettet; ingen slik innlogging finnes i den deploybare applikasjonen.
 
-- Komplett Weather Display-paritet: øvrige beregninger som ET/graddager, avansert vind-/regnstatistikk, ekstra sensorer, alarmregler, alle rekordperioder, rapport-/malformater, historikkimport og eventuelle lokale WD-verktøy. Den konkrete matrisen er i `weather-display-scope.md`.
-- ESP32 har foreløpig ingen implementert firmware-nedlasting/OTA-distribusjon eller fjernfornyelse av klientsertifikat. Oppstartskontrollen for en OTA-partisjon er ikke et komplett oppdateringssystem.
-- ESP32 har foreløpig ikke varig mellomlager og senere tilbakesending av målinger under internettbrudd. Dermed er ubrutt historikk ved nettutfall ikke levert.
-- ISS-radioens oppstartssøk, hopping, RF-dekoding og rollback trenger fysisk verifikasjon mot de faktiske Vue-/Pro2-stasjonene. ISS-repeatere, USB-host og WeatherLink IP er ikke implementert; disse er ikke valgt som prosjektets datavei.
-- Secure Boot, flash-/NVS-kryptering og eFuse-provisjonering er ikke aktivert eller fysisk verifisert. Vanlig firmwarelagring beskytter ikke private nøkler ved fysisk uttrekk. WROOM-navnet alene er ikke tilstrekkelig grunnlag for irreversible eFuse-valg.
-- Netatmo er utsatt etter avtale.
+ESP32-firmwaren er kompilert med ESP-IDF 6.0.2, MQTT 1.1.0 og cJSON 1.7.19~2. Den passer i begge 1,5 MB OTA-partisjoner. Testbygget har utviklingsidentiteter og skal ikke flashes som produksjon. Den faktiske C-koden for flashkøen er i tillegg prøvd med vertsbasert feilinjeksjon ved avbrutt skriving, sektorvis sletting, køomløp og tap av kvitteringscheckpoint. Dette erstatter ikke en fysisk strømkuttprøve.
 
-Disse hullene er utviklingsarbeid og testarbeid. De skal ikke presenteres som innstillinger som bare mangler i `.env`, og systemet skal ikke omtales som ferdig produksjonsklart før de er håndtert.
+Kjøringer og endelig antall tester dokumenteres i [akseptanseveiledningen](production-acceptance.md). DockerHub-workflowen kjører fortsatt bare bygg og publisering, som bestilt.
+
+## Før produksjon kan godkjennes
+
+1. Start begge stakker på faktisk Docker/Portainer-host. Prøv volumer, rettigheter, nettverk, ressursgrenser, sertifikater og omstart.
+2. Bygg med ekte stasjonsidentiteter. Kontroller fysisk ESP32-revisjon før valg av Secure Boot-profil, nøkkelbackup og irreversible eFuse-tiltak. Sikkerhetsprofilen er klargjort; eFuses er ikke aktivert eller prøvd her.
+3. Prøv radio, kalibrering og sender-ID på alle fire ISS-stasjonene. Sammenlign målinger med Davis/Weather Display. Prøv nettutfall, full kø, strømkutt, sertifikatfornyelse, OTA og feil gateway-IP.
+4. Ta SQL-backup, kjør den [konkrete NULL-migrasjonen](../deploy/sql/20261020-nullable-weather-measurements.sql) med egnet driftskonto og samordne bytte av skriver. Appen utfører ikke produksjons-DDL. Kontroller faktisk INSERT-/UPDATE-tilgang og levering.
+5. Fullfør Apache/DNS/brannmur og kontroller adminisolasjon utenfra over både IPv4 og IPv6. Apache-arbeidet er utsatt etter avtale.
+6. Prøv restore av database, enhetsidentiteter og nøkler isolert. Sammenlign levende filer og Socket.IO med Sunnmørsvær og avtalte WD-rapporter.
+
+## Avgrensninger som ikke skal skjules
+
+- Referanse-ET og våttemperatur er implementert, men krever blant annet absolutt stasjonstrykk. ISS sender ikke dette; resultatet for de valgte stasjonene er derfor manglende inntil en kilde tilføres.
+- Solskinn fra globalstråling er et estimat. Vindkast fra ISS-kadens er ikke sertifisert høyfrekvent WMO-måling. En full sendekø kan miste nye pakker og viser antall tap.
+- Absolutt bit-/formatekvivalens med alle Weather Display-funksjoner er ikke bevist. Kamera/video, tale, reléstyring, eksterne sensormoduler og alle leverandørens mal-/rapportvarianter er ikke implementert bare fordi de finnes i WD. [Matrisen](weather-display-scope.md) beskriver dette eksplisitt.
+- Netatmo er utsatt etter brukerens avklaring. ISS-repeatere, WeatherLink IP og USB-host er ikke valgt datavei.
+
+Det som gjenstår på målutstyret kan ikke erstattes av en `.env`-verdi eller omtales som allerede verifisert.

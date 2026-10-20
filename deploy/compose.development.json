@@ -29,6 +29,14 @@
         "WG_DEVELOPMENT_ORIGIN": "${WG_DEVELOPMENT_ORIGIN}",
         "WG_PRODUCTION_ORIGIN": "${WG_PRODUCTION_ORIGIN}",
         "WG_ROLE": "control",
+        "WG_DB_ALLOWED_DATABASES": "${WG_DB_ALLOWED_DATABASES:-}",
+        "WG_DB_LAN_ENDPOINTS": "${WG_DB_LAN_ENDPOINTS:-}",
+        "WG_DB_PASSWORD": "${WG_DB_PASSWORD:-}",
+        "WG_DB_PASSWORD_SKODJE": "${WG_DB_PASSWORD_SKODJE:-}",
+        "WG_DB_PASSWORD_HAHJEM": "${WG_DB_PASSWORD_HAHJEM:-}",
+        "WG_DB_PASSWORD_LONGVA": "${WG_DB_PASSWORD_LONGVA:-}",
+        "WG_DB_PASSWORD_VATNE": "${WG_DB_PASSWORD_VATNE:-}",
+        "WG_DB_CA_FILE": "/run/secrets/db-ca.pem",
         "WG_ADMIN_CIDRS": "${WG_ADMIN_CIDRS}",
         "WG_TRUSTED_PROXIES": "${WG_TRUSTED_PROXIES}",
         "WG_LDAP_URLS": "${WG_LDAP_URLS}",
@@ -39,7 +47,8 @@
         "WG_LDAP_PASSWORD_FILE": "/run/secrets/ldap-password",
         "WG_LDAP_CA_FILE": "/run/secrets/ad-ca.pem",
         "WG_ISSUER_KEY_FILE": "/run/secrets/client-ca.key",
-        "WG_ISSUER_CA_FILE": "/run/secrets/client-ca.pem"
+        "WG_ISSUER_CA_FILE": "/run/secrets/client-ca.pem",
+        "WG_FIRMWARE_PUBLIC_KEY_FILE": "/run/secrets/firmware-signing-public.pem"
       },
       "volumes": [
         {
@@ -86,6 +95,24 @@
           "bind": {
             "create_host_path": false
           }
+        },
+        {
+          "type": "bind",
+          "source": "/data/req/weathergateway/secrets/development/db-ca.pem",
+          "target": "/run/secrets/db-ca.pem",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/data/req/weathergateway/secrets/development/firmware-signing-public.pem",
+          "target": "/run/secrets/firmware-signing-public.pem",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
         }
       ],
       "ports": ["${WG_ADMIN_BIND_IP:?Sett en privat LAN-adresse}:18091:8080"],
@@ -119,6 +146,14 @@
         "WG_DEVELOPMENT_ORIGIN": "${WG_DEVELOPMENT_ORIGIN}",
         "WG_PRODUCTION_ORIGIN": "${WG_PRODUCTION_ORIGIN}",
         "WG_ROLE": "worker",
+        "WG_DB_ALLOWED_DATABASES": "${WG_DB_ALLOWED_DATABASES:-}",
+        "WG_DB_LAN_ENDPOINTS": "${WG_DB_LAN_ENDPOINTS:-}",
+        "WG_DB_PASSWORD": "${WG_DB_PASSWORD:-}",
+        "WG_DB_PASSWORD_SKODJE": "${WG_DB_PASSWORD_SKODJE:-}",
+        "WG_DB_PASSWORD_HAHJEM": "${WG_DB_PASSWORD_HAHJEM:-}",
+        "WG_DB_PASSWORD_LONGVA": "${WG_DB_PASSWORD_LONGVA:-}",
+        "WG_DB_PASSWORD_VATNE": "${WG_DB_PASSWORD_VATNE:-}",
+        "WG_DB_CA_FILE": "/run/secrets/db-ca.pem",
         "WG_MQTT_URL": "mqtts://broker:8883",
         "WG_MQTT_CA_FILE": "/run/secrets/client-ca.pem",
         "WG_MQTT_CERT_FILE": "/run/secrets/worker.pem",
@@ -156,6 +191,15 @@
           "type": "bind",
           "source": "/data/req/weathergateway/secrets/development/worker.key",
           "target": "/run/secrets/worker.key",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/data/req/weathergateway/secrets/development/db-ca.pem",
+          "target": "/run/secrets/db-ca.pem",
           "read_only": true,
           "bind": {
             "create_host_path": false

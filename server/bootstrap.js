@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { gatewaySchema, defaultDevice } from './schema.js';
+import { gatewaySchema, defaultDevice, databaseSchema } from './schema.js';
 
 const commaSeparated = (value) =>
   value
@@ -59,6 +59,13 @@ export function configuration(env = process.env) {
     mqttCaFile: env.WG_MQTT_CA_FILE,
     mqttCertFile: env.WG_MQTT_CERT_FILE,
     mqttKeyFile: env.WG_MQTT_KEY_FILE,
+    databasePasswords: Object.fromEntries(
+      Object.entries(env).filter(([name]) => /^WG_DB_PASSWORD(?:_[A-Z0-9_]{1,48})?$/.test(name)),
+    ),
+    databaseAllowlist: commaSeparated(env.WG_DB_ALLOWED_DATABASES || ''),
+    databaseLanEndpoints: commaSeparated(env.WG_DB_LAN_ENDPOINTS ?? env.WG_DB_TUNNEL_ENDPOINTS ?? ''),
+    databaseCaFile: env.WG_DB_CA_FILE || undefined,
+    firmwarePublicKeyFile: env.WG_FIRMWARE_PUBLIC_KEY_FILE || undefined,
   };
 }
 const seeds = [
@@ -146,5 +153,15 @@ export function initialize(store, defaults) {
       rainCounterMmPerUnit: 0.2,
     });
     store.initialize(`device:${id}`, defaultDevice(id, defaults.publicOrigin, store.environment));
+  }
+  for (const station of store.stationList()) {
+    store.db
+      .prepare('INSERT OR IGNORE INTO meta VALUES (?,?)')
+      .run(`station_started:${station.value.id}`, String(store.clock()));
+    store.initialize(
+      `database:${station.value.id}`,
+      databaseSchema.parse({ stationId: station.value.id, stationKey: station.value.key }),
+    );
+    store.initialize(`alarms:${station.value.id}`, { stationId: station.value.id, rules: [] });
   }
 }
