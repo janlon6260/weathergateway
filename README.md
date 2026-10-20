@@ -8,6 +8,8 @@ Implementert: React-panel med sanntidsliste, LDAPS/roller, stasjons-/enhetsadmin
 
 ## Lokal utvikling
 
+USB-flashing direkte i nettleseren og sanntidslogger via USB eller kryptert MQTT finnes under **Enheter**. Se [oppsett og bruk](docs/esp32-browser.md) for USB-pakker, nettleserkrav og firmware 2.1.0.
+
 Bruk Node 24 LTS, og installer de låste avhengighetene:
 
 ```sh

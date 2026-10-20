@@ -281,12 +281,12 @@ export function syncAcl(store) {
   const path = store.safe('system', 'mqtt', 'acl');
   acl = acl.replace(
     `topic read ${root}/+/telemetry\n`,
-    `topic read ${root}/+/telemetry\ntopic read ${root}/+/telemetry-undated\ntopic read ${root}/+/certificate-request\ntopic write ${root}/+/telemetry-receipt\n`,
+    `topic read ${root}/+/telemetry\ntopic read ${root}/+/logs\ntopic read ${root}/+/telemetry-undated\ntopic read ${root}/+/certificate-request\ntopic write ${root}/+/telemetry-receipt\n`,
   );
   for (const stationId of enabled)
     acl = acl.replaceAll(
       `topic write ${root}/${stationId}/telemetry\n`,
-      `topic write ${root}/${stationId}/telemetry\ntopic write ${root}/${stationId}/telemetry-undated\ntopic write ${root}/${stationId}/certificate-request\ntopic read ${root}/${stationId}/telemetry-receipt\n`,
+      `topic write ${root}/${stationId}/telemetry\ntopic write ${root}/${stationId}/logs\ntopic write ${root}/${stationId}/telemetry-undated\ntopic write ${root}/${stationId}/certificate-request\ntopic read ${root}/${stationId}/telemetry-receipt\n`,
     );
   if (!existsSync(path) || readFileSync(path, 'utf8') !== acl) {
     writeFileSync(`${path}.tmp`, acl, { mode: 0o640 });

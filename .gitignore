@@ -36,3 +36,4 @@ node_modules/
 /firmware/sdkconfig
 /firmware/sdkconfig.old
 /.tools/
+*.usb-flash.json

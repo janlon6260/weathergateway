@@ -8,6 +8,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "esp_event.h"
+#include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
@@ -28,6 +29,7 @@
 #include "wg_ota.h"
 #include "wg_spool.h"
 #include "wg_credentials.h"
+#include "wg_logs.h"
 #include "provisioning.h"
 
 #if !CONFIG_MQTT_PROTOCOL_5
@@ -124,8 +126,8 @@ static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void 
   static command_t incoming;
   static bool accepting;
   switch (event_id) {
-    case MQTT_EVENT_CONNECTED: connected = true; new_connection = true; esp_mqtt_client_subscribe(event->client, command_topic, 1); esp_mqtt_client_subscribe(event->client, firmware_topic, 1); esp_mqtt_client_subscribe(event->client, receipt_topic, 1); break;
-    case MQTT_EVENT_DISCONNECTED: connected = false; break;
+    case MQTT_EVENT_CONNECTED: connected = true; new_connection = true; ESP_LOGI(TAG, "MQTT connected with TLS and device certificate"); esp_mqtt_client_subscribe(event->client, command_topic, 1); esp_mqtt_client_subscribe(event->client, firmware_topic, 1); esp_mqtt_client_subscribe(event->client, receipt_topic, 1); break;
+    case MQTT_EVENT_DISCONNECTED: connected = false; ESP_LOGW(TAG, "MQTT disconnected; observations remain in durable storage"); break;
     case MQTT_EVENT_PUBLISHED: if (event->msg_id == telemetry_message_id) telemetry_acked = true; break;
     case MQTT_EVENT_DATA:
       if (event->current_data_offset == 0) {
@@ -211,7 +213,13 @@ static void process_command(const char *json) {
   } else if (!strcmp(kind,"renew_certificate")) {
     state.command_sequence = seq; state.last_epoch = now; copy_text(state.last_command,sizeof(state.last_command),id); copy_text(state.last_status,sizeof(state.last_status),"received"); persist();
     if (wg_credentials_stage(o,id,end,state.pending || wg_ota_busy())) { ack(id,"received"); reconnect(); } else ack(id,"rejected"); goto done;
-  } else if (!strcmp(kind, "restart")) { copy_text(state.last_status, sizeof(state.last_status), "applied"); }
+  } else if (!strcmp(kind, "stream_logs")) {
+    const char *session_id = text(o, "logSessionId"); int64_t log_end = expiry(text(o, "logExpiresAt"));
+    if (!uuid(session_id) || !log_end || log_end - now > 300) { ack(id, "rejected"); goto done; }
+    wg_logs_stream(session_id, log_end);
+    copy_text(state.last_status, sizeof(state.last_status), "applied");
+    ESP_LOGI(TAG, "Network logging %s; bounded RAM queue and automatic expiry", wg_logs_active() ? "started" : "stopped");
+  } else if (!strcmp(kind, "restart")) { ESP_LOGW(TAG, "Restart requested by administrator"); copy_text(state.last_status, sizeof(state.last_status), "applied"); }
   else { ack(id, "rejected"); goto done; }
   state.command_sequence = seq; state.last_epoch = now; copy_text(state.last_command, sizeof(state.last_command), id); persist();
   ack(id, state.last_status);
@@ -224,8 +232,8 @@ static void wifi_retry(void *arg) { (void)arg; esp_wifi_connect(); }
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
   (void)arg; (void)data;
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) esp_wifi_connect();
-  else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) { xEventGroupClearBits(network_events, 1); if (wifi_failures < 5) wifi_failures++; esp_timer_start_once(wifi_retry_timer, (1LL << wifi_failures) * 1000000LL); }
-  else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) { wifi_failures = 0; xEventGroupSetBits(network_events, 1); }
+  else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) { ESP_LOGW(TAG, "Wi-Fi disconnected; reconnecting with backoff"); xEventGroupClearBits(network_events, 1); if (wifi_failures < 5) wifi_failures++; esp_timer_start_once(wifi_retry_timer, (1LL << wifi_failures) * 1000000LL); }
+  else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) { ESP_LOGI(TAG, "Wi-Fi connected and IP address acquired"); wifi_failures = 0; xEventGroupSetBits(network_events, 1); }
 }
 static void emit_record(const wg_spool_record_t *record) {
   if (!connected) return;
@@ -235,7 +243,7 @@ static void emit_record(const wg_spool_record_t *record) {
     struct timeval tv; gettimeofday(&tv,NULL);
     epoch_ms = (int64_t)tv.tv_sec*1000+tv.tv_usec/1000-(esp_timer_get_time()-record->monotonic_us)/1000LL; mapped = true;
   } else if (!epoch_ms) undated = true;
-  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.0.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.1.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
   if (record->release_id[0]) cJSON_AddStringToObject(o,"firmwareReleaseId",record->release_id);
   if (wg_credentials_id()[0]) cJSON_AddStringToObject(o,"certificateId",wg_credentials_id());
   if (undated) { cJSON_AddNumberToObject(o,"monotonicUs",record->monotonic_us); cJSON_AddStringToObject(o,"reason","clock-unavailable-before-reboot"); }
@@ -278,7 +286,7 @@ static void configuration_watchdog(void *unused) {
   }
 }
 void app_main(void) {
-  (void)TAG;
+  esp_log_level_set("*", ESP_LOG_WARN); esp_log_level_set(TAG, ESP_LOG_INFO);
   setenv("TZ", "UTC0", 1); tzset();
   if (psa_crypto_init() != PSA_SUCCESS) abort();
   ESP_ERROR_CHECK(nvs_flash_init()); ESP_ERROR_CHECK(nvs_open("gateway", NVS_READWRITE, &nvs));
@@ -305,6 +313,8 @@ void app_main(void) {
   esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org"); ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
   uint8_t random[16]; esp_fill_random(random, sizeof(random)); random[6] = (random[6] & 15) | 64; random[8] = (random[8] & 63) | 128;
   snprintf(boot_id, sizeof(boot_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", random[0],random[1],random[2],random[3],random[4],random[5],random[6],random[7],random[8],random[9],random[10],random[11],random[12],random[13],random[14],random[15]);
+  wg_logs_init(boot_id);
+  ESP_LOGI(TAG, "WeatherGateway 2.1.0 started; station %s", WG_STATION_ID);
   snprintf(command_topic, sizeof(command_topic), "wg/v1/%s/stations/%s/commands", WG_ENVIRONMENT, WG_STATION_ID); snprintf(telemetry_topic, sizeof(telemetry_topic), "wg/v1/%s/stations/%s/telemetry", WG_ENVIRONMENT, WG_STATION_ID); snprintf(ack_topic, sizeof(ack_topic), "wg/v1/%s/stations/%s/acks", WG_ENVIRONMENT, WG_STATION_ID); snprintf(status_topic, sizeof(status_topic), "wg/v1/%s/stations/%s/status", WG_ENVIRONMENT, WG_STATION_ID);
   snprintf(firmware_topic,sizeof(firmware_topic),"wg/v1/%s/stations/%s/firmware-data",WG_ENVIRONMENT,WG_STATION_ID);
   snprintf(receipt_topic,sizeof(receipt_topic),"wg/v1/%s/stations/%s/telemetry-receipt",WG_ENVIRONMENT,WG_STATION_ID);
@@ -322,16 +332,26 @@ void app_main(void) {
     if (current.radio) got_packet = davis_radio_poll(now / 1000, packet, &channel, &rssi);
     else got_packet = davis_poll(now / 1000, current.seconds, packet);
     bool failed = current.radio ? davis_radio_failed(now / 1000) : davis_failed();
-    if (got_packet) publish(packet, current.radio ? 10 : 99, channel, rssi);
+    if (got_packet) {
+      publish(packet, current.radio ? 10 : 99, channel, rssi);
+      static int64_t last_packet_log;
+      if (now-last_packet_log >= 10000000LL) { ESP_LOGI(TAG, "Sensor packet received: channel=%d, RSSI=%d dBm", channel+1, rssi); last_packet_log=now; }
+    }
     else if (failed && now - last_publish >= current.seconds * 1000000LL) publish(NULL, 0, 0, 0);
     if (verifying && telemetry_acked && !failed) { ESP_ERROR_CHECK(esp_ota_mark_app_valid_cancel_rollback()); verifying = false; }
     if (verifying && now >= verify_deadline) esp_ota_mark_app_invalid_rollback_and_reboot();
     wg_ota_tick(connected,got_packet,telemetry_acked,reconnected);
+    wg_logs_tick(mqtt, connected);
     if (wg_credentials_tick(connected,telemetry_acked,state.pending || wg_ota_busy())) reconnect();
     if (connected && now-last_spool_send >= 3000000LL) { wg_spool_record_t queued; if (wg_spool_peek(&queued)) { emit_record(&queued); last_spool_send = now; } }
     if (connected && (reconnected || now-last_device_status >= 30000000LL)) {
       cJSON *o = cJSON_CreateObject(); cJSON_AddBoolToObject(o,"online",true); cJSON_AddNumberToObject(o,"pending",wg_spool_pending()); cJSON_AddNumberToObject(o,"capacity",wg_spool_capacity()); cJSON_AddNumberToObject(o,"dropped",wg_spool_dropped()); cJSON_AddBoolToObject(o,"clockSynchronized",time(NULL) >= WG_MINIMUM_EPOCH);
       esp_chip_info_t chip; esp_chip_info(&chip);
+      ESP_LOGI(TAG, "Status: sensor=%s pending=%u dropped=%u heap=%u", failed ? "missing" : "OK", (unsigned)wg_spool_pending(), (unsigned)wg_spool_dropped(), (unsigned)esp_get_free_heap_size());
+      esp_netif_ip_info_t network; esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+      if (netif && esp_netif_get_ip_info(netif, &network) == ESP_OK) { char ip[16]; snprintf(ip, sizeof(ip), IPSTR, IP2STR(&network.ip)); cJSON_AddStringToObject(o, "ipAddress", ip); }
+      wifi_ap_record_t access_point; if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) cJSON_AddNumberToObject(o, "wifiRssiDbm", access_point.rssi);
+      cJSON_AddBoolToObject(o, "logStreaming", wg_logs_active());
       cJSON *security = cJSON_AddObjectToObject(o,"security"); cJSON_AddNumberToObject(security,"chipRevision",chip.revision); cJSON_AddBoolToObject(security,"secureBoot",esp_secure_boot_enabled()); cJSON_AddBoolToObject(security,"flashEncryption",esp_efuse_is_flash_encryption_enabled());
 #if CONFIG_NVS_ENCRYPTION
       cJSON_AddBoolToObject(security,"nvsEncryption",true);

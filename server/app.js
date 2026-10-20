@@ -22,6 +22,8 @@ import { records, climateText, renderTemplate } from './reports.js';
 import { importHistory } from './history-import.js';
 import { readiness, acceptanceChecks, deploymentFingerprint } from './readiness.js';
 import { validitySchema } from './certificate-validity.js';
+import { logSession, readDeviceLogs } from './device-logs.js';
+import { verifyUsbFirmware } from './usb-firmware.js';
 
 const safeGatewayFields = [
   'confirmationSeconds',
@@ -108,6 +110,10 @@ export function controlApp({ store, config, directory, certificates, certificate
     sessions = new Sessions(store, directory, { secure: config.secureCookies }),
     allowedNetwork = privateNetworks(config.adminCidrs),
     streams = new Map();
+  app.use((_req, res, next) => {
+    res.set('Permissions-Policy', 'serial=(self)');
+    next();
+  });
   app.use((req, res, next) =>
     allowedNetwork(req.ip)
       ? next()
@@ -145,7 +151,9 @@ export function controlApp({ store, config, directory, certificates, certificate
     '/api',
     asyncHandler(async (req, _res, next) => {
       req.session = await sessions.read(req, !['GET', 'HEAD'].includes(req.method), {
-        touch: !['/state', '/live', '/live/events'].includes(req.path),
+        touch:
+          !['/state', '/live', '/live/events'].includes(req.path) &&
+          !/\/devices\/[^/]+\/logs(?:\/session)?$/.test(req.path),
       });
       if (!['GET', 'HEAD'].includes(req.method) && !equal(req.headers['x-csrf-token'], req.session.csrf))
         throw new Rejected('Ugyldig sikkerhetstoken', 403);
@@ -421,6 +429,15 @@ export function controlApp({ store, config, directory, certificates, certificate
       else throw new Rejected('Ukjent handling', 404);
       res.json(store.getChange(changeId));
     }),
+  );
+  app.get('/api/devices/:stationId/logs', permission('operator'), (req, res) =>
+    res.json(readDeviceLogs(store, req.params.stationId, req.query.after)),
+  );
+  app.post('/api/devices/:stationId/logs/session', permission('operator'), (req, res) =>
+    res.status(202).json(logSession(store, req.params.stationId, req.body, req.session.principal.sid)),
+  );
+  app.post('/api/devices/:stationId/flash/verify', permission('administrator'), (req, res) =>
+    res.json(verifyUsbFirmware(store, config, req.params.stationId, req.body, req.session.principal.sid)),
   );
   app.post('/api/devices/:stationId/restart', permission('operator'), (req, res) => {
     const stationId = id.parse(req.params.stationId),

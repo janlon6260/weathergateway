@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS weather_bins(station_id TEXT NOT NULL,hour INTEGER NO
 CREATE TABLE IF NOT EXISTS firmware_releases(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,manifest TEXT NOT NULL,signature TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(station_id,manifest));
 CREATE TABLE IF NOT EXISTS telemetry_rejections(station_id TEXT NOT NULL,boot_id TEXT NOT NULL,sequence INTEGER NOT NULL,received_at INTEGER NOT NULL,reason TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,boot_id,sequence));
 CREATE TABLE IF NOT EXISTS device_status(station_id TEXT PRIMARY KEY,received_at INTEGER NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS device_log_sessions(station_id TEXT PRIMARY KEY,id TEXT NOT NULL,expires_at INTEGER NOT NULL,command_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS device_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,station_id TEXT NOT NULL,boot_id TEXT NOT NULL,sequence INTEGER NOT NULL,received_at INTEGER NOT NULL,payload TEXT NOT NULL,UNIQUE(station_id,boot_id,sequence));
+CREATE INDEX IF NOT EXISTS device_logs_station ON device_logs(station_id,id);
 CREATE TABLE IF NOT EXISTS certificate_renewals(station_id TEXT PRIMARY KEY,certificate_id TEXT NOT NULL,new_id TEXT,state TEXT NOT NULL,created_at INTEGER NOT NULL,command_id TEXT,error TEXT);
 CREATE TABLE IF NOT EXISTS alarm_state(station_id TEXT NOT NULL,rule_id TEXT NOT NULL,rule_hash TEXT NOT NULL,active INTEGER NOT NULL,pending_since INTEGER,clearing_since INTEGER,last_at INTEGER NOT NULL,value REAL,suspended INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(station_id,rule_id));
 CREATE TABLE IF NOT EXISTS alarm_events(id INTEGER PRIMARY KEY AUTOINCREMENT,station_id TEXT NOT NULL,rule_id TEXT NOT NULL,name TEXT NOT NULL,at INTEGER NOT NULL,kind TEXT NOT NULL,value REAL,acknowledged_at INTEGER,acknowledged_by TEXT);

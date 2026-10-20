@@ -35,6 +35,8 @@ RSA-nøkkelen for Secure Boot er forskjellig fra ECDSA P-256-nøkkelen som signe
 
 ## Test, tilbakeføring og signert OTA
 
+Standardprofilen kan installeres fra **Enheter** i adminpanelet med en signert `.usb-flash.json`-pakke. USB-logg og nettverkslogg via MQTT beskrives i [nettleserveiledningen](../docs/esp32-browser.md). Maskinvaresikret førstegangsoppsett over gjøres fortsatt med ESP-IDF.
+
 Konfigurasjon har aktiv/forrige/kandidat i NVS, UTC-frist og monoton frist. Uavhengig vakt restarter ved utløpt test selv om nettverksoppgaven stopper. Oppstart under konfigurasjonstest gjenoppretter bekreftet innstilling. Gatewayen krever kandidatkvittering og ferske, gyldige sensordata før «Gjør gjeldende», og venter deretter på commit-kvittering.
 
 OTA bruker SHA-256 og et ECDSA P-256-signert manifest bundet til stasjon, miljø, versjon, sekvens og bildestørrelse. Bildet lastes i avgrensede MQTT-blokker til den andre app-partisjonen. En ny app må sende gyldig sensordata og MQTT-publiseringskvittering; administrator må også bekrefte før fristen. Uten bekreftelse går enheten tilbake. Secure Boot-profilen krever i tillegg et korrekt RSA-signert appbilde. Se [signering og drift](../docs/firmware-lifecycle.md).

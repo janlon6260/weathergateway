@@ -27,7 +27,9 @@ Maksimal inntaksmelding er 16 KiB, med rategrense per stasjon. Bare kjente aktiv
 
 ## Kommandoer og kvitteringer
 
-Felles kommandofelt: `version`, `stationId`, `commandId`, positiv `sequence`, `kind`, `issuedAt`, `expiresAt`. Tillatte typer: `restart`, `test_config`, `commit_config`, `rollback_config`, `test_firmware`, `commit_firmware`, `rollback_firmware` og `renew_certificate`. Ingen vilkårlig shell. OTA krever signert bilde og [eget livsløp](firmware-lifecycle.md).
+Fra firmware 2.1.0 støttes også `stream_logs` med `logSessionId` (UUID) og `logExpiresAt` (UTC). Ordinær kommandosekvens, utløp og ACK gjelder. Enheten videresender bare ordinære logglinjer mens økten gjelder (maksimalt 300 sekunder per kommando). Emnet `logs` tillater bare publisering fra stasjonens egne sertifikater og lesing fra gatewayarbeideren, QoS 0, aldri retained. Meldingen har `version:1`, `stationId`, `sessionId`, `bootId`, `sequence`, `uptimeMs`, `level`, `message` og `dropped`. Se [driftsveiledningen](esp32-browser.md) for grenser og retensjon.
+
+Felles kommandofelt: `version`, `stationId`, `commandId`, positiv `sequence`, `kind`, `issuedAt`, `expiresAt`. Tillatte typer: `restart`, `test_config`, `commit_config`, `rollback_config`, `test_firmware`, `commit_firmware`, `rollback_firmware`, `renew_certificate` og `stream_logs`. Ingen vilkårlig shell. OTA krever signert bilde og [eget livsløp](firmware-lifecycle.md).
 
 `test_config` har `configuration` og SHA-256 `configurationHash`. RF-innstillingene omfatter brokerens navn/IP, port, kontaktmeldingsintervall, `interface:'davis-iss-rfm69'`, `radioBand:'EU868'`, `transmitterId:1..8`, `spiSck`, `spiMiso`, `spiMosi`, `radioCs`, `radioReset` og `radioDio0`. Seriealternativet har UART-pinner/-baud. Kandidatens JSON og hash kontrolleres lokalt. Commit og rollback er knyttet til hashen; UTC-frist, monoton timer og høyeste kritiske sekvens lagres i NVS.
 

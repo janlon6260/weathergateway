@@ -18,6 +18,7 @@
     "astronomy-engine": "2.1.19",
     "better-sqlite3": "^12.4.1",
     "cookie": "^1.0.2",
+    "esptool-js": "0.7.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.0",
     "helmet": "^8.1.0",

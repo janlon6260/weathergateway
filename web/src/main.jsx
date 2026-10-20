@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 import { CertificateAdministration } from './certificates.jsx';
+import { DeviceTools } from './device-tools.jsx';
 import { meteorologyDefaults, calibrationDefaults } from '../../shared/meteorology-settings.js';
 import { alarmMetrics } from '../../shared/alarm-metrics.js';
 import {
@@ -73,6 +74,7 @@ function App() {
     [notice, setNotice] = useState(''),
     [modal, setModal] = useState(null),
     [pending, setPending] = useState(false),
+    [deviceBusy, setDeviceBusy] = useState(false),
     [now, setNow] = useState(Date.now()),
     [filter, setFilter] = useState(''),
     [selection, setSelection] = useState([]),
@@ -383,7 +385,12 @@ function App() {
         <p className="nav-caption">ARBEIDSOMRÅDE</p>
         <nav>
           {visiblePages.map((p) => (
-            <button key={p} className={page === p ? 'active' : ''} onClick={() => setPage(p)}>
+            <button
+              key={p}
+              disabled={deviceBusy}
+              className={page === p ? 'active' : ''}
+              onClick={() => setPage(p)}
+            >
               <span className="nav-icon" aria-hidden="true">
                 {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓', '◇'][Object.keys(labels).indexOf(p)]}
               </span>
@@ -404,6 +411,7 @@ function App() {
           <button
             onClick={() =>
               action(async () => {
+                if (deviceBusy) return;
                 await api('/logout', {});
                 setSession(null);
               })
@@ -427,6 +435,7 @@ function App() {
                 onClick={() => {
                   const target =
                     environment === 'development' ? gateway.productionOrigin : gateway.developmentOrigin;
+                  if (deviceBusy) return;
                   if (target) location.assign(target);
                   else setNotice('Det andre miljøets adresse må konfigureres i innstillingene.');
                 }}
@@ -662,6 +671,14 @@ function App() {
                         )}
                         <dt>Konfigurasjon</dt>
                         <dd>Revisjon {device.revision}</dd>
+                        <dt>ESP32 IP-adresse</dt>
+                        <dd>{device.delivery?.ipAddress || 'Ikke rapportert'}</dd>
+                        <dt>Wi-Fi-signal</dt>
+                        <dd>
+                          {typeof device.delivery?.wifiRssiDbm === 'number'
+                            ? `${device.delivery.wifiRssiDbm} dBm`
+                            : 'Ikke rapportert'}
+                        </dd>
                         <dt>Identitet</dt>
                         <dd className="monospace small">{device.value.stationId}</dd>
                         <dt>Sendekø på ESP32</dt>
@@ -690,13 +707,22 @@ function App() {
                         </button>
                         <button onClick={() => setModal({ type: 'restart', station })}>Restart</button>
                         {admin && (
-                          <button onClick={() => setPage('certificates')}>Administrer sertifikater</button>
+                          <button disabled={deviceBusy} onClick={() => setPage('certificates')}>
+                            Administrer sertifikater
+                          </button>
                         )}
                       </div>
                     </section>
                   );
                 })}
               </div>
+              <DeviceTools
+                stations={data.stations}
+                environment={data.environment}
+                admin={admin}
+                api={api}
+                onBusy={setDeviceBusy}
+              />
               <section className="panel">
                 <div className="panel-heading">
                   <h2>Siste kommandoer</h2>

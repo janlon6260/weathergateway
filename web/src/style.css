@@ -964,3 +964,60 @@ textarea {
     font-size: 26px;
   }
 }
+
+.device-tools {
+  margin-top: 24px;
+}
+.device-tools .actions {
+  flex-wrap: wrap;
+  align-items: end;
+}
+.device-tools .actions label {
+  min-width: 120px;
+}
+.usb-flash-box {
+  margin: 24px 0;
+  padding: 20px;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 10px;
+}
+.usb-flash-box h3 {
+  margin: 0 0 12px;
+}
+.usb-flash-box .checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 18px 0;
+}
+.usb-flash-box .checkbox input {
+  width: auto;
+  margin-top: 4px;
+  flex: none;
+}
+.flash-progress {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 14px 0;
+}
+.flash-progress progress {
+  flex: 1;
+  min-width: 0;
+}
+.terminal-controls {
+  margin: 22px 0 12px;
+}
+.device-terminal {
+  background: #10231e;
+  color: #daf6e6;
+  border-radius: 10px;
+  padding: 18px;
+  height: 350px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12px/1.65 Consolas,
+    monospace;
+}

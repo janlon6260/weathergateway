@@ -14,6 +14,7 @@ import { CertificateIssuer, opensslExecutable } from '../server/pki.js';
 import { startWorker } from '../server/worker.js';
 import { observation } from './helpers.js';
 import { mqttSubjectAltNames } from '../server/tls-identities.js';
+import { logSession, readDeviceLogs } from '../server/device-logs.js';
 
 const binary = process.env.WG_MOSQUITTO_BIN;
 const deadline = (promise, ms = 8000) => {
@@ -222,6 +223,42 @@ test(
       }
       assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM observations').get().n, 1);
       assert.equal(foreignReceipts, 0);
+      const lease = logSession(store, first.stationId, { seconds: 120 }, 'integration-test');
+      const line = {
+        version: 1,
+        stationId: first.stationId,
+        sessionId: lease.sessionId,
+        bootId: body.bootId,
+        sequence: 1,
+        uptimeMs: 1000,
+        level: 'info',
+        message: 'MQTT log integration',
+        dropped: 0,
+      };
+      const publishLine = (sender, sequence, override = {}) =>
+        sender
+          .publishAsync(`${topic}/logs`, JSON.stringify({ ...line, sequence, ...override }), { qos: 1 })
+          .catch(() => {});
+      const waitLog = (sequence) =>
+        deadline(
+          (async () => {
+            while (!readDeviceLogs(store, first.stationId, 0).entries.some((r) => r.sequence === sequence))
+              await new Promise((r) => setTimeout(r, 50));
+          })(),
+        );
+      await publishLine(a, 1);
+      await waitLog(1);
+      await publishLine(b, 2); // Another station's certificate must not write this topic.
+      await publishLine(a, 3);
+      await waitLog(3);
+      await publishLine(a, 4, { stationId: second.stationId }); // Topic and payload identities must agree.
+      await publishLine(a, 5);
+      await waitLog(5);
+      assert.deepEqual(
+        readDeviceLogs(store, first.stationId, 0).entries.map((r) => r.sequence),
+        [1, 3, 5],
+      );
+      assert.equal(readDeviceLogs(store, second.stationId, 0).entries.length, 0);
       const invalid = { ...body, stationId: second.stationId, sequence: 2 };
       await a
         .publishAsync(`wg/v1/development/stations/${second.stationId}/telemetry`, JSON.stringify(invalid), {

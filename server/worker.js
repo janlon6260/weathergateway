@@ -10,6 +10,7 @@ import { publicProjection } from './public-projection.js';
 import { firmwareChunk } from './firmware-updates.js';
 import { requestCertificateRenewal } from './pki.js';
 import { checkAlarms } from './alarms.js';
+import { ingestDeviceLog, pruneDeviceLogs } from './device-logs.js';
 
 export function deviceHealth(store, stationId) {
   const observation = latest(store, stationId);
@@ -327,6 +328,7 @@ export function startWorker(store, config, databaseWriter) {
         `${root}/+/acks`,
         `${root}/+/firmware-request`,
         `${root}/+/certificate-request`,
+        `${root}/+/logs`,
       ],
       { qos: 1 },
     ),
@@ -336,18 +338,23 @@ export function startWorker(store, config, databaseWriter) {
   );
   const rates = new Map();
   let rejected = 0;
-  client.on('message', (topic, payload) => {
+  client.on('message', (topic, payload, packet) => {
     const key = topic.split('/')[4],
       now = Date.now();
-    let bucket = rates.get(key);
+    const isLog = topic === `${root}/${key}/logs`;
+    const rateKey = isLog ? `logs:${key}` : key;
+    let bucket = rates.get(rateKey);
     if (!bucket) {
       if (rates.size >= 512) {
         rejected++;
         return;
       }
-      rates.set(key, (bucket = { at: now, tokens: 40 }));
+      rates.set(rateKey, (bucket = { at: now, tokens: isLog ? 10 : 40 }));
     }
-    bucket.tokens = Math.min(40, bucket.tokens + Math.max(0, now - bucket.at) * 0.02);
+    bucket.tokens = Math.min(
+      isLog ? 10 : 40,
+      bucket.tokens + Math.max(0, now - bucket.at) * (isLog ? 0.005 : 0.02),
+    );
     bucket.at = now;
     if (bucket.tokens < 1) {
       rejected++;
@@ -355,7 +362,9 @@ export function startWorker(store, config, databaseWriter) {
     }
     bucket.tokens--;
     try {
-      if (topic === `${root}/${key}/telemetry` || topic === `${root}/${key}/telemetry-undated`) {
+      if (isLog) {
+        ingestDeviceLog(store, key, payload, { retained: packet?.retain });
+      } else if (topic === `${root}/${key}/telemetry` || topic === `${root}/${key}/telemetry-undated`) {
         const receipt = durableTelemetryReceipt(store, id.parse(key), payload, {
           undated: topic.endsWith('/telemetry-undated'),
         });
@@ -379,6 +388,9 @@ export function startWorker(store, config, databaseWriter) {
             capacity: z.number().int().positive().optional(),
             dropped: z.number().int().nonnegative().optional(),
             clockSynchronized: z.boolean().optional(),
+            ipAddress: z.ipv4().optional(),
+            wifiRssiDbm: z.number().int().min(-127).max(0).optional(),
+            logStreaming: z.boolean().optional(),
             security: z
               .object({
                 chipRevision: z.number().int().nonnegative(),
@@ -472,6 +484,7 @@ export function startWorker(store, config, databaseWriter) {
             .run(store.clock(), command.id);
         }
       if (counter % 10 === 0) {
+        pruneDeviceLogs(store);
         maintain(store);
         checkAlarms(store);
       }
