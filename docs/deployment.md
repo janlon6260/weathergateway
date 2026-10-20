@@ -42,7 +42,7 @@ docker pull janlon6260/weathergateway:latest
 
 Miljøeksemplene bruker `WG_IMAGE=janlon6260/weathergateway:latest`. Sett en publisert `sha-...`-tagg eller et konkret digest når installasjonen skal låses til ett bestemt bygg. Begge miljøer kan bruke samme image med ulike innstillinger og datamapper; sett `WG_IMAGE` separat for å prøve et nytt bygg i utvikling før produksjon. Stacken bygger ikke kildekode i Web editor. Et lokalt image kan fortsatt bygges med `docker build --pull -t janlon6260/weathergateway:local .`.
 
-Kontroller at riktig disk er montert. Den oppdaterte stacken kan startes uten sertifikater og trenger ikke host-bootstrap. En kort `prepare`-jobb klargjør mapper/eierskap uten nettverk og avsluttes før ordinære tjenester. Control lager database, offentlig værdatakopi og brokerkonfigurasjon. Broker og worker venter på sertifikater; ingen ukryptert MQTT-lytter opprettes.
+Kontroller at riktig disk er montert. Den oppdaterte stacken kan startes uten sertifikater. Opprett miljøets data- og sertifikatmapper på hosten med eier **70001:70007** før deploy; ved oppgradering må eksisterende filer også kunne leses/skrives av denne brukeren. En kort `prepare`-jobb oppretter undermapper uten root eller nettverk og avsluttes før ordinære tjenester. Control lager database, offentlig værdatakopi og brokerkonfigurasjon. Broker og worker venter på sertifikater; ingen ukryptert MQTT-lytter opprettes. [Firmwarebyggeren](firmware-server-builds.md) har egne jobb-/cachemapper og bruker ingen nettverkstilkobling.
 
 Logg inn gjennom intern HTTPS-proxy og åpne **Sertifikater**. Velg gyldighet inntil 50 år, angi DNS-navn/IP-adresser, og opprett CA, MQTT-identiteter og firmware-nøkler. Eksisterende nøkler beholdes. Se [sertifikatveiledningen](certificates.md) for førstegangsoppsett, fornyelse, automatisk tilbakerulling og eksport til HTTPS/SQL.
 
@@ -57,7 +57,7 @@ Legg følgende filer under `/data/req/weathergateway/secrets/<miljø>`:
 | `server.key` / `.pem`    | Brokerens TLS-identitet med offentlig MQTT-navn og `broker` i SAN.                                 |
 | `worker.key` / `.pem`    | MQTT-arbeiderens klientidentitet.                                                                  |
 
-AD-bindpassordet kan settes i `.env` eller Portainers miljøvariabler som beskrevet over. Private nøkler og øvrige hemmeligheter monteres som filer. `.env` er utelatt fra både Git og Docker-byggkonteksten. Normal UID er 10001/GID 10001; offentlig API har UID 10002/GID 10001, broker UID 1883/GID 10001. CA- og arbeidernøkler er 0400; brokerens servernøkkel er 0440 for felles GID. AD-filene skal bare kunne leses av nødvendig tjenestebruker.
+AD-bindpassordet kan settes i `.env` eller Portainers miljøvariabler som beskrevet over. Private nøkler og øvrige hemmeligheter monteres som filer. `.env` er utelatt fra både Git og Docker-byggkonteksten. Alle containere kjører med UID **70001** / GID **70007**. Tjenestene får separate mount-mapper, og public har skrivebeskyttet værdatakopi. CA- og arbeidernøkler er 0400; brokerens servernøkkel er 0440. AD-filene skal bare kunne leses av nødvendig tjenestebruker.
 
 ## Stack og nettverk
 
@@ -94,7 +94,7 @@ Control lager konsistente databasekopier i `<miljø>/system/backups` med miljø,
 Prøv gjenoppretting på en isolert kopi først. Ved reell restore: stopp alle fire tjenester, behold diskbackup og bruk UUID fra backuplisten:
 
 ```sh
-docker run --rm --user 10001:10001 --env-file .env \
+docker run --rm --user 70001:70007 --env-file .env \
   -e WG_DATA_ROOT=/data -e WG_OFFLINE_RESTORE=services-stopped \
   -v /data/req/weathergateway/production:/data \
   janlon6260/weathergateway:latest node scripts/restore-backup.js BACKUP-UUID

@@ -31,6 +31,7 @@
 #include "wg_credentials.h"
 #include "wg_logs.h"
 #include "wg_mqtt_lifecycle.h"
+#include "wg_config_storage.h"
 #include "provisioning.h"
 
 #if !CONFIG_MQTT_PROTOCOL_5
@@ -58,6 +59,7 @@ typedef struct { char json[COMMAND_SIZE]; uint8_t kind; } command_t;
 static persistent_t state;
 static config_t current;
 static nvs_handle_t nvs;
+static nvs_handle_t configuration_nvs;
 static esp_mqtt_client_handle_t mqtt;
 static wg_mqtt_lifecycle_t mqtt_lifecycle;
 static volatile bool clock_synchronized;
@@ -113,7 +115,7 @@ static bool parse_config(const char *json, config_t *out) {
   if (valid) for (const char *p = host; *p; ++p) if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '.' || *p == '-')) valid = false;
   cJSON_Delete(o); return valid;
 }
-static void persist(void) { ESP_ERROR_CHECK(nvs_set_blob(nvs, "state", &state, sizeof(state))); ESP_ERROR_CHECK(nvs_commit(nvs)); }
+static void persist(void) { ESP_ERROR_CHECK(nvs_set_blob(configuration_nvs, "state", &state, sizeof(state))); ESP_ERROR_CHECK(nvs_commit(configuration_nvs)); }
 static const char *configuration_json(void) { return state.pending ? state.candidate : state.active; }
 static const char *configuration_hash(void) { return state.pending ? state.candidate_hash : state.active_hash; }
 static void ack(const char *id, const char *status) {
@@ -280,7 +282,7 @@ static void emit_record(const wg_spool_record_t *record) {
     struct timeval tv; gettimeofday(&tv,NULL);
     epoch_ms = (int64_t)tv.tv_sec*1000+tv.tv_usec/1000-(esp_timer_get_time()-record->monotonic_us)/1000LL; mapped = true;
   } else if (!epoch_ms) undated = true;
-  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.1.1"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.2.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
   if (record->release_id[0]) cJSON_AddStringToObject(o,"firmwareReleaseId",record->release_id);
   if (wg_credentials_id()[0]) cJSON_AddStringToObject(o,"certificateId",wg_credentials_id());
   if (undated) { cJSON_AddNumberToObject(o,"monotonicUs",record->monotonic_us); cJSON_AddStringToObject(o,"reason","clock-unavailable-before-reboot"); }
@@ -327,7 +329,16 @@ void app_main(void) {
   setenv("TZ", "UTC0", 1); tzset();
   if (psa_crypto_init() != PSA_SUCCESS) abort();
   ESP_ERROR_CHECK(nvs_flash_init()); ESP_ERROR_CHECK(nvs_open("gateway", NVS_READWRITE, &nvs));
-  size_t length = sizeof(state); esp_err_t loaded = nvs_get_blob(nvs, "state", &state, &length);
+  configuration_nvs = nvs;
+#ifdef WG_BUILD_ID
+  // Each OTA slot owns its settings. A candidate starts with its compiled defaults;
+  // rollback boots the previous slot with that slot's confirmed settings untouched.
+  // The build UUID also invalidates settings left by an older image in this slot.
+  const esp_partition_t *configuration_partition = esp_ota_get_running_partition();
+  ESP_ERROR_CHECK(wg_config_storage(configuration_partition->address, WG_BUILD_ID, &configuration_nvs));
+  ESP_LOGI(TAG, "Server firmware build %s", WG_BUILD_ID);
+#endif
+  size_t length = sizeof(state); esp_err_t loaded = nvs_get_blob(configuration_nvs, "state", &state, &length);
   if (loaded == ESP_ERR_NVS_NOT_FOUND) { memset(&state, 0, sizeof(state)); state.version = 1; copy_text(state.active, sizeof(state.active), WG_DEFAULT_CONFIG); copy_text(state.active_hash, sizeof(state.active_hash), WG_DEFAULT_HASH); persist(); }
   else if (loaded != ESP_OK || length != sizeof(state) || state.version != 1) abort();
   // A power cycle never grants a new test lease. Restore the confirmed record.
@@ -353,7 +364,7 @@ void app_main(void) {
   uint8_t random[16]; esp_fill_random(random, sizeof(random)); random[6] = (random[6] & 15) | 64; random[8] = (random[8] & 63) | 128;
   snprintf(boot_id, sizeof(boot_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", random[0],random[1],random[2],random[3],random[4],random[5],random[6],random[7],random[8],random[9],random[10],random[11],random[12],random[13],random[14],random[15]);
   wg_logs_init(boot_id);
-  ESP_LOGI(TAG, "WeatherGateway 2.1.1 started; station %s", WG_STATION_ID);
+  ESP_LOGI(TAG, "WeatherGateway 2.2.0 started; station %s", WG_STATION_ID);
   snprintf(command_topic, sizeof(command_topic), "wg/v1/%s/stations/%s/commands", WG_ENVIRONMENT, WG_STATION_ID); snprintf(telemetry_topic, sizeof(telemetry_topic), "wg/v1/%s/stations/%s/telemetry", WG_ENVIRONMENT, WG_STATION_ID); snprintf(ack_topic, sizeof(ack_topic), "wg/v1/%s/stations/%s/acks", WG_ENVIRONMENT, WG_STATION_ID); snprintf(status_topic, sizeof(status_topic), "wg/v1/%s/stations/%s/status", WG_ENVIRONMENT, WG_STATION_ID);
   snprintf(firmware_topic,sizeof(firmware_topic),"wg/v1/%s/stations/%s/firmware-data",WG_ENVIRONMENT,WG_STATION_ID);
   snprintf(receipt_topic,sizeof(receipt_topic),"wg/v1/%s/stations/%s/telemetry-receipt",WG_ENVIRONMENT,WG_STATION_ID);

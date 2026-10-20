@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS weather_segments(station_id TEXT NOT NULL,start_at IN
 CREATE INDEX IF NOT EXISTS weather_segments_end ON weather_segments(station_id,end_at);
 CREATE TABLE IF NOT EXISTS weather_bins(station_id TEXT NOT NULL,hour INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,hour));
 CREATE TABLE IF NOT EXISTS firmware_releases(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,manifest TEXT NOT NULL,signature TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(station_id,manifest));
+CREATE TABLE IF NOT EXISTS firmware_builds(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,state TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,payload TEXT NOT NULL,release_id TEXT,error TEXT,log TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS telemetry_rejections(station_id TEXT NOT NULL,boot_id TEXT NOT NULL,sequence INTEGER NOT NULL,received_at INTEGER NOT NULL,reason TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,boot_id,sequence));
 CREATE TABLE IF NOT EXISTS device_status(station_id TEXT PRIMARY KEY,received_at INTEGER NOT NULL,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS device_log_sessions(station_id TEXT PRIMARY KEY,id TEXT NOT NULL,expires_at INTEGER NOT NULL,command_id TEXT NOT NULL);
@@ -201,6 +202,13 @@ export class Store {
     return this.db
       .transaction(() => {
         const current = this.current(scope);
+        if (
+          scope.startsWith('device:') &&
+          this.db
+            .prepare("SELECT 1 FROM changes WHERE scope=? AND state IN ('draft','testing','confirming')")
+            .get(`firmware:${scope.slice(7)}`)
+        )
+          fail('Avslutt firmwaretesten før du endrer enhetsinnstillingene');
         if (current.revision !== baseRevision) fail('Konfigurasjonen er endret. Last inn på nytt.');
         if (
           this.db
@@ -266,6 +274,20 @@ export class Store {
           );
         this.audit(actor, 'test', { changeId, deadline });
         if (c.scope.startsWith('firmware:')) {
+          if (
+            this.db
+              .prepare("SELECT 1 FROM changes WHERE scope=? AND state IN ('draft','testing','confirming')")
+              .get(`device:${c.candidate.stationId}`)
+          )
+            fail('Avslutt enhetstesten før firmwareoppdatering');
+          const build = this.db
+            .prepare("SELECT payload FROM firmware_builds WHERE release_id=? AND state='ready'")
+            .get(c.candidate.releaseId);
+          if (build) {
+            const p = JSON.parse(build.payload);
+            if (hash(this.confirmedValue(`device:${c.candidate.stationId}`)) !== p.baseHash)
+              fail('Enhetsinnstillingene er endret. Bygg firmware på nytt.');
+          }
           const release = this.db
             .prepare('SELECT * FROM firmware_releases WHERE id=? AND station_id=?')
             .get(c.candidate.releaseId, c.candidate.stationId);

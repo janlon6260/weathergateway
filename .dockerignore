@@ -9,7 +9,12 @@ web/dist
 *.pem
 *.key
 *.sqlite3*
-firmware
+firmware/build*
+firmware/managed_components
+firmware/sdkconfig*
+!firmware/sdkconfig.defaults
+!firmware/sdkconfig.production.defaults
+firmware/main/provisioning.h
 .tools
 artifacts
 .github

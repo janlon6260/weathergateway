@@ -105,7 +105,15 @@ export async function probe(store, directory, change, principal, databaseWriter)
       );
   return report;
 }
-export function controlApp({ store, config, directory, certificates, certificateManager, databaseWriter }) {
+export function controlApp({
+  store,
+  config,
+  directory,
+  certificates,
+  certificateManager,
+  databaseWriter,
+  firmwareBuilds,
+}) {
   const app = baseApp(config),
     sessions = new Sessions(store, directory, { secure: config.secureCookies }),
     allowedNetwork = privateNetworks(config.adminCidrs),
@@ -439,6 +447,34 @@ export function controlApp({ store, config, directory, certificates, certificate
   app.post('/api/devices/:stationId/flash/verify', permission('administrator'), (req, res) =>
     res.json(verifyUsbFirmware(store, config, req.params.stationId, req.body, req.session.principal.sid)),
   );
+  app.use('/api/firmware-builds', permission('administrator'), (_req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    if (!firmwareBuilds) return next(new Rejected('Firmwarebyggeren er ikke konfigurert', 503));
+    next();
+  });
+  app.get('/api/firmware-builds/stations/:stationId', (req, res) =>
+    res.json(firmwareBuilds.status(req.params.stationId)),
+  );
+  app.post(
+    '/api/firmware-builds/stations/:stationId',
+    asyncHandler(async (req, res) =>
+      res
+        .status(202)
+        .json(await firmwareBuilds.start(req.params.stationId, req.body, req.session.principal.sid)),
+    ),
+  );
+  app.post('/api/firmware-builds/stations/:stationId/identity', (req, res) =>
+    res.json(firmwareBuilds.importIdentity(req.params.stationId, req.body, req.session.principal.sid)),
+  );
+  app.get('/api/firmware-builds/:buildId/usb', (req, res) =>
+    res.json(firmwareBuilds.usb(req.params.buildId)),
+  );
+  app.post('/api/firmware-builds/:buildId/cancel', (req, res) =>
+    res.json(firmwareBuilds.cancel(req.params.buildId, req.session.principal.sid)),
+  );
+  app.post('/api/firmware-builds/:buildId/usb-complete', (req, res) =>
+    res.json(firmwareBuilds.usbComplete(req.params.buildId, req.session.principal.sid)),
+  );
   app.post('/api/devices/:stationId/restart', permission('operator'), (req, res) => {
     const stationId = id.parse(req.params.stationId),
       station = store.current(`station:${stationId}`).value;
@@ -475,6 +511,7 @@ export function controlApp({ store, config, directory, certificates, certificate
         throw new Rejected('Initialiser sertifikater og firmware-nøkler under Sertifikater først.', 409);
       const bundle = await certificates.issue(stationId, validity),
         configuration = store.current(`device:${stationId}`).value;
+      firmwareBuilds?.remember(bundle);
       store.audit(req.session.principal.sid, 'certificate_issued', {
         stationId,
         fingerprint: bundle.fingerprint,

@@ -10,6 +10,8 @@ Gateway kan angis med IP eller DNS-navn. IP må stå som **IP-SAN** i brokerens 
 
 ## Provisjonering og vanlig kompilering
 
+Vanlig installasjon gjøres nå i **Enheter → Bygg firmware på serveren**: angi gateway, MQTT-port og Wi-Fi, kompiler på serveren og velg USB eller OTA. Se [serverbygg](../docs/firmware-server-builds.md) og [nettleserflashing](../docs/esp32-browser.md). Kommandoene nedenfor er et alternativ for lokal firmwareutvikling.
+
 1. Last ned unik enhetspakke fra riktig stasjon og miljø. Behold den beskyttet: den inneholder privatnøkkel og stasjonsidentitet og trengs ved senere bygg.
 2. Sett `WG_WIFI_SSID` og `WG_WIFI_PASSWORD` i prosessmiljøet. Ikke legg dem i Git eller kommandologg.
 3. Kjør `node scripts/provision-firmware.js /beskyttet/enhetspakke.json` fra prosjektroten. Git-ignorerte `provisioning.h`, CA, enhetssertifikat og nøkkel skrives til `firmware/main`. Erstatning krever `WG_REPLACE_PROVISIONING=true`.
@@ -20,7 +22,7 @@ Gateway kan angis med IP eller DNS-navn. IP må stå som **IP-SAN** i brokerens 
 
 ## Første sikkerhetsprovisjonering
 
-Se [feilsøking av bygg og første oppstart](../docs/firmware-troubleshooting.md) ved DNS-, GPIO- eller radioproblemer. Fastvaren identifiserer seg som 2.1.1 og beholder applikasjonens INFO-logger også ved gjenbruk av eldre `sdkconfig` med WARN-nivå.
+Se [feilsøking av bygg og første oppstart](../docs/firmware-troubleshooting.md) ved DNS-, GPIO- eller radioproblemer. Fastvaren identifiserer seg som 2.2.0 og beholder applikasjonens INFO-logger også ved gjenbruk av eldre `sdkconfig` med WARN-nivå.
 
 [sdkconfig.production.defaults](sdkconfig.production.defaults) og [partitions.production.csv](partitions.production.csv) klargjør Secure Boot V2, flashkryptering i release-modus og NVS-kryptering for **fysisk verifisert ESP32 revision 3.0+**. NVS-nøkkelpartisjonen er separat og kryptert. Partisjonstabell/NVS flyttes; denne profilen er en førsteprovisjonering, ikke en OTA-migrasjon fra vanlig utviklingspartisjonering.
 

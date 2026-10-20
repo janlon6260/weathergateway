@@ -9,6 +9,7 @@ import { finishBackups, recoverBackups, scheduleBackup } from './backups.js';
 import { WeatherDatabase } from './weather-database.js';
 import { CertificateManager } from './certificates.js';
 import { prepareRuntime } from './runtime-files.js';
+import { FirmwareBuilds } from './firmware-builds.js';
 
 process.umask(0o027);
 const config = configuration(),
@@ -30,6 +31,8 @@ const certificates =
       })
     : null;
 const renewCertificates = config.role === 'control' ? renewalProcessor(store, certificates) : null;
+const firmwareBuilds =
+  config.role === 'control' ? new FirmwareBuilds({ store, config, certificates, certificateManager }) : null;
 if (config.role === 'control') {
   syncAcl(store);
   recoverBackups(store);
@@ -51,6 +54,7 @@ else {
           directory: new Directory({ password: config.ldapPassword, caFile: config.ldapCaFile }),
           certificates,
           certificateManager,
+          firmwareBuilds,
         });
   server = createServer(service.app);
   server.requestTimeout = 15000;
@@ -74,6 +78,7 @@ if (config.role === 'control') {
     try {
       store.sweep();
       certificateManager.sweep();
+      firmwareBuilds.poll();
       syncAcl(store);
       if (++backupCheck % 60 === 0) scheduleBackup(store);
       if (!renewalTask && certificateManager.pending()?.type !== 'ca')

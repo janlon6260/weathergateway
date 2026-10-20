@@ -14,19 +14,20 @@ React, Node/Express, Docker-oppsett og ESP-IDF-firmware er implementert i dette 
 - MariaDB/MySQL til eksisterende `wx_data`, vedvarende leveringskø, beholdt historikk ved gjentakelse, direkte privat LAN uten krav om VPN/TLS, valgfrie verifiserte TLS-forbindelser og utvidede feltkoblinger.
 - Unike mTLS-identiteter, stasjonsbundet MQTT-ACL, IP- og DNS-SAN, sertifikatsperring og automatisk fjernfornyelse av enhetssertifikater uten å flytte privatnøkkelen.
 - Signert OTA over eksisterende MQTT, ECDSA P-256-manifest, SHA-256, stasjons-/miljøbinding, sekvenskontroll, eksplisitt bekreftelse og tilbakeføring.
+- Firmwarebygg fra adminpanelet med gatewayadresse, MQTT-port og Wi-Fi før kompilering. Separat ESP-IDF 6.1-builder uten nettverk, signering i control, kryptert enhetslager og direkte USB-pakke til nettleseren eller OTA-test over MQTT. Alle tjenester bruker UID 70001/GID 70007.
 - Varig, avgrenset ESP32-sendekø i slitasjeutjevnet flash. Bare gatewayens kvittering etter varig lagring frigjør køplass. Ukjent måletid arkiveres uten oppdiktet UTC.
 - Konsistente SQLite-backuper med kontrollsum, automatisk plan/retensjon, offline restore og separat offentlig datakopi. Nøkler og hostfiler trenger også beskyttet hostbackup.
 - Produksjonsstatus i panelet: faktisk sensor-/SQL-/kø-/sikkerhetsstatus samt konfigurasjonsbundne manuelle akseptanseprøver. Den blir ikke godkjent av enhetstester alene.
 
 ## Lokal verifikasjon
 
-**117 backendtester bestått, ingen feil eller hoppet over.** Produksjonsavhengighetenes sårbarhetskontroll rapporterte 0 kjente sårbarheter 20. oktober 2026.
+**147 tester bestått, ingen feil eller hoppet over.** Inkluderer serverbygg, enhetsnøkler, passordmaskering, kansellering av kompilatorens underprosesser og vertsbaserte firmwareprøver. Den tidligere kontrollen av produksjonsavhengigheter rapporterte 0 kjente sårbarheter 20. oktober 2026; avhengighetene er ikke endret i serverbygg-leveransen.
 
 Backendtesten inkluderer en ekte Mosquitto 2.1.2 med mTLS/IP-SAN/ACL og en egen MariaDB 11.4.13 med kopier av alle fire faktiske tabellskjemaer. SQL-migrasjonen er prøvd der, inkludert alle værkolonner, Vatnes ekstra felter og gjentakelse etter usikkert commit-resultat. Ingen produksjonsdata ble endret.
 
 React-produksjonsbygg og Edge-test på desktop/mobil er gjennomført. Nettleserprøven dekker kalibreringsutkast, alarmutkast, signert firmwareutkast, historikkimport og produksjonsstatus. AD er erstattet av en kontrollert adapter bare i testoppsettet; ingen slik innlogging finnes i den deploybare applikasjonen.
 
-ESP32-firmwaren er kompilert med ESP-IDF 6.0.2, MQTT 1.1.0 og cJSON 1.7.19~2. Den passer i begge 1,5 MB OTA-partisjoner. Testbygget har utviklingsidentiteter og skal ikke flashes som produksjon. Den faktiske C-koden for flashkøen er i tillegg prøvd med vertsbasert feilinjeksjon ved avbrutt skriving, sektorvis sletting, køomløp og tap av kvitteringscheckpoint. Dette erstatter ikke en fysisk strømkuttprøve.
+Firmware **2.2.0** er kompilert med ESP-IDF **6.1**, MQTT 1.1.0 og cJSON 1.7.19~2 gjennom det faktiske skjemaet i adminpanelet. Appen er 1 082 160 byte og passer i begge 1,5 MB OTA-partisjoner. Nettleseren hentet den servergenererte pakken direkte og verifiserte signatur og alle fire segmenter. Desktop/mobil, gjenbruk av byggcache og tomt passordfelt etter innsending er kontrollert. Testbygget har utviklingsidentiteter og skal ikke flashes som produksjon. Docker-containeren er ikke kjørt lokalt, siden ingen Docker-daemon er tilgjengelig. Den faktiske C-koden for flashkø og separat konfigurasjonslager per OTA-slot er også vertsbasert testet; dette erstatter ikke en fysisk strømbrudd-/tilbakeføringsprøve.
 
 Kjøringer og endelig antall tester dokumenteres i [akseptanseveiledningen](production-acceptance.md). DockerHub-workflowen kjører fortsatt bare bygg og publisering, som bestilt.
 

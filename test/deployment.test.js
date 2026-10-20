@@ -13,7 +13,7 @@ test('Portainer stacks have independent literal mounts, ports and networks', () 
     assert.ok(stack.services.control.volumes.every((v) => v.source.includes(`/${environment}`)));
     assert.equal(stack.services.public.volumes[0].read_only, true);
     assert.ok(stack.services.public.volumes[0].source.endsWith(`/${environment}/public`));
-    assert.notEqual(stack.services.public.user, stack.services.control.user);
+    for (const service of Object.values(stack.services)) assert.equal(service.user, '70001:70007');
     assert.deepEqual(stack.services.control.networks, ['control']);
     assert.deepEqual(stack.services.public.networks, ['public']);
     assert.equal(JSON.stringify(stack.services.public).includes('ldap-password'), false);
@@ -29,8 +29,14 @@ test('Portainer stacks have independent literal mounts, ports and networks', () 
     );
     assert.equal(JSON.stringify(stack.services.worker).includes('client-ca.key'), false);
     assert.equal(JSON.stringify(stack).includes('/var/run/docker.sock'), false);
-    assert.equal(stack.services.prepare.user, '0:0');
+    assert.equal(stack.services.prepare.user, '70001:70007');
     assert.equal(stack.services.prepare.network_mode, 'none');
+    assert.equal(stack.services['firmware-builder'].network_mode, 'none');
+    assert.equal(stack.services['firmware-builder'].volumes.length, 2);
+    assert.equal(
+      stack.services['firmware-builder'].volumes.some((v) => v.source.includes('/secrets/')),
+      false,
+    );
     assert.ok(stack.services.control.volumes.every((v) => !/\.(pem|key)$/.test(v.source)));
     assert.equal(stack.services.control.depends_on.prepare.condition, 'service_completed_successfully');
     assert.equal(stack.services.worker.depends_on.broker.condition, 'service_started');

@@ -59,6 +59,10 @@ export function firmwareHealth(store, stationId) {
         c.candidate.releaseId === observation.firmwareReleaseId,
     );
   if (!change) return false;
+  const build = store.db
+    .prepare("SELECT payload FROM firmware_builds WHERE release_id=? AND state='ready'")
+    .get(change.candidate.releaseId);
+  if (build && hash(JSON.parse(build.payload).configuration) !== observation.configurationHash) return false;
   const command = store.db
     .prepare("SELECT * FROM commands WHERE change_id=? AND kind='test_firmware' AND state='testing'")
     .get(change.id);
@@ -94,6 +98,20 @@ export function handleAck(store, stationId, input) {
           )
             throw new Error('ACK gjelder en annen firmware');
           if (ack.status === 'applied' && command.kind === 'commit_firmware' && c.state === 'confirming') {
+            const build = store.db
+              .prepare("SELECT payload FROM firmware_builds WHERE release_id=? AND state='ready'")
+              .get(c.candidate.releaseId);
+            if (build) {
+              const p = JSON.parse(build.payload);
+              if (
+                ack.configurationHash !== hash(p.configuration) ||
+                hash(store.confirmedValue(`device:${stationId}`)) !== p.baseHash
+              )
+                throw new Error('Firmwarekvitteringen gjelder andre enhetsinnstillinger');
+              store.db
+                .prepare('UPDATE configuration SET payload=?,revision=revision+1 WHERE scope=?')
+                .run(JSON.stringify(p.configuration), `device:${stationId}`);
+            }
             store.db.prepare("UPDATE changes SET state='confirmed' WHERE id=?").run(c.id);
             store.audit(stationId, 'firmware_confirmed', {
               changeId: c.id,

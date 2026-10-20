@@ -722,6 +722,10 @@ function App() {
                 admin={admin}
                 api={api}
                 onBusy={setDeviceBusy}
+                onDeploy={() => {
+                  void refresh().catch((e) => setError(e.message));
+                  setPage('changes');
+                }}
               />
               <section className="panel">
                 <div className="panel-heading">
@@ -844,6 +848,7 @@ function App() {
               releases={data.firmwareReleases || []}
               stations={data.stations}
               pending={pending}
+              build={() => setPage('devices')}
               upload={(file) =>
                 action(async () => {
                   await api('/firmware', JSON.parse(await file.text()));
@@ -1340,14 +1345,18 @@ function StationForm({ record, pending, save }) {
     </form>
   );
 }
-function FirmwareManager({ releases, stations, pending, upload, deploy }) {
+function FirmwareManager({ releases, stations, pending, upload, deploy, build }) {
   return (
     <section className="panel settings-form">
       <h2>Signerte firmwareutgivelser</h2>
       <p>
-        Last opp en signert utgivelse for riktig stasjon og miljø. En test må bekreftes innen fristen etter at
-        enheten har startet og sendt gyldige sensordata.
+        Bygg firmware på serveren under Enheter med gatewayadresse, MQTT-port og Wi-Fi. En OTA-test må
+        bekreftes innen fristen etter at enheten har startet og sendt gyldige sensordata. Du kan også
+        importere en ferdig signert utgivelse nedenfor.
       </p>
+      <button className="primary" onClick={build}>
+        Bygg ny firmware på serveren
+      </button>
       <label>
         Utgivelsesfil (JSON)
         <input
@@ -1380,9 +1389,13 @@ function FirmwareManager({ releases, stations, pending, upload, deploy }) {
                 <td>{release.manifest.sequence}</td>
                 <td>{Math.ceil(release.manifest.size / 1024)} kB</td>
                 <td>
-                  <button disabled={pending} onClick={() => deploy(release.id)}>
-                    Opprett testutkast
-                  </button>
+                  {release.installation === 'usb' ? (
+                    <button onClick={build}>Installer via USB under Enheter</button>
+                  ) : (
+                    <button disabled={pending} onClick={() => deploy(release.id)}>
+                      Opprett testutkast
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

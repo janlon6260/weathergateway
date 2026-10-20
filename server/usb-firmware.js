@@ -23,6 +23,16 @@ export function verifyUsbFirmware(store, config, stationId, input, actor) {
   if (manifest.stationId !== stationId || manifest.environment !== store.environment)
     throw new Rejected('USB-pakken gjelder en annen stasjon eller et annet miljø', 400);
   const station = store.confirmedValue(`station:${stationId}`);
+  if (
+    store
+      .changes()
+      .some(
+        (c) =>
+          ['draft', 'testing', 'confirming'].includes(c.state) &&
+          [`device:${stationId}`, `firmware:${stationId}`].includes(c.scope),
+      )
+  )
+    throw new Rejected('Avslutt enhets- og firmwaretester før USB-flashing');
   if (!station.enabled || station.model === 'Netatmo') throw new Rejected('Velg en aktiv ESP32-stasjon');
   if (!config.firmwarePublicKeyFile || !existsSync(config.firmwarePublicKeyFile))
     throw new Rejected('Firmware-verifikasjonsnøkkelen mangler', 503);
@@ -42,7 +52,19 @@ export function verifyUsbFirmware(store, config, stationId, input, actor) {
     .prepare('SELECT 1 FROM certificates WHERE id=? AND station_id=? AND revoked_at IS NULL AND expires_at>?')
     .get(manifest.certificateId, stationId, store.clock());
   if (!certificate) throw new Rejected('Enhetssertifikatet er utløpt, tilbakekalt eller ukjent');
-  if (hash(store.confirmedValue(`device:${stationId}`)) !== manifest.configurationHash)
+  const build = store.db
+    .prepare(
+      "SELECT payload FROM firmware_builds WHERE station_id=? AND state='ready' AND json_extract(payload,'$.configuration') IS NOT NULL",
+    )
+    .all(stationId)
+    .map((r) => JSON.parse(r.payload))
+    .find(
+      (p) =>
+        hash(p.configuration) === manifest.configurationHash &&
+        p.certificateId === manifest.certificateId &&
+        p.baseHash === hash(store.confirmedValue(`device:${stationId}`)),
+    );
+  if (hash(store.confirmedValue(`device:${stationId}`)) !== manifest.configurationHash && !build)
     throw new Rejected('Enhetsinnstillingene har blitt endret. Bygg en ny USB-pakke.');
   store.audit(actor, 'usb_firmware_authorized', {
     stationId,

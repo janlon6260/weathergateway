@@ -26,6 +26,8 @@ Ekstern databaseskriving konfigureres under **Databaser** i adminpanelet, med pa
 
 ## Docker og Portainer
 
+Firmware kompileres nå på serveren fra **Enheter → Bygg firmware på serveren**. Angi gatewayadresse, MQTT-port og Wi-Fi, og installer via nettleserens USB eller eksisterende MQTT/TLS med test/bekreft. [Byggtjenesten](docs/firmware-server-builds.md) bruker et separat `janlon6260/weathergateway:firmware-builder`-image uten nettverk og med UID 70001/GID 70007. GitHub-workflowen bygger og publiserer også dette imaget uten tester.
+
 [Driftsveiledningen](docs/deployment.md) beskriver bygg, `.env`, hemmelighetsfiler, klargjøring av disken, Portainer, sikkerhetskopi og gjenoppretting. Apache2-konfigurasjonen utføres senere, som avtalt.
 
 [DockerHub-workflowen](.github/workflows/dockerhub.yml) bygger og publiserer **`janlon6260/weathergateway`** ved push til `main`, versjonstagger `v*.*.*` eller manuell kjøring. Den bruker GitHub-environment `prod` og secret `DOCKERHUB_TOKEN`. Workflow og Dockerfile kjører ingen tester. React og Express inngår i samme image, som gjenbrukes av de tre applikasjonstjenestene; Mosquitto har eget offisielt image.

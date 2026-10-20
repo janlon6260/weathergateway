@@ -2,9 +2,11 @@
 
 Førstegangsoppsettet under **Sertifikater** oppretter én ECDSA P-256-signaturnøkkel per miljø under `secrets/<miljø>/firmware-signing.key` med tilhørende offentlig PEM-fil. Privatnøkkelen er bare tilgjengelig i control sin sertifikatmappe og kan eksporteres til beskyttet signeringsmaskin. Andre tjenestecontainere får den ikke. Behold offentlig fil på hosten og sikkerhetskopier nøklene. Den private enhetsnøkkelen for MQTT er separat og unik per enhet.
 
-Last ned og bevar stasjonens originale enhetspakke. Senere OTA-bygg må beholde den samme stasjonsidentiteten, private enhetsnøkkelen, miljøet og betrodde OTA-nøkkelen. Ny utstedelse av enhetspakke er en ny identitet, ikke ordinær firmwareoppdatering. Ved Secure Boot må appen også bygges/signeres med kortets beholdte RSA-3072-nøkkel og samme sikkerhets-/partisjonsprofil.
+Vanlig firmwarebygg gjøres i **Enheter → Bygg firmware på serveren**. Fyll inn gatewayadresse, MQTT/TLS-port og Wi-Fi, velg USB eller OTA, og start kompileringen. Kontrollserveren beholder stasjonens privatnøkkel og Wi-Fi-passord i et kryptert enhetslager. Den signerer resultatet automatisk. Se [byggtjenesten](firmware-server-builds.md).
 
-Etter bygg:
+Bevar også stasjonens originale enhetspakke beskyttet som sikkerhetskopi. En tidligere klargjort enhet kan importeres én gang i panelet. Senere OTA-bygg må beholde den samme stasjonsidentiteten, private enhetsnøkkelen, miljøet og betrodde OTA-nøkkelen. Ny utstedelse av enhetspakke er en ny identitet. Ved Secure Boot må appen også bygges/signeres med kortets beholdte RSA-3072-nøkkel og samme sikkerhets-/partisjonsprofil; serverbyggerens standardprofil dekker ikke dette.
+
+Alternativt, ved lokal firmwareutvikling, signer et manuelt bygg slik:
 
 ```sh
 node scripts/sign-firmware.js APP.bin STASJONS-UUID production 1.2.0 2 \

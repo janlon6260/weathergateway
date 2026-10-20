@@ -3,7 +3,7 @@ import { readFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync, re
 import { join } from 'node:path';
 import { z } from 'zod';
 import { firmwareManifestSchema, id } from './schema.js';
-import { Rejected } from './store.js';
+import { Rejected, hash } from './store.js';
 
 export const manifestBytes = (m) =>
   Buffer.from(
@@ -80,7 +80,7 @@ export function uploadFirmware(store, config, input, actor) {
 export function firmwareReleases(store) {
   return store.db
     .prepare(
-      'SELECT id,station_id,manifest,created_at FROM firmware_releases ORDER BY created_at DESC LIMIT 100',
+      "SELECT r.id,r.station_id,r.manifest,r.created_at,COALESCE(json_extract(b.payload,'$.purpose'),'ota') AS installation FROM firmware_releases r LEFT JOIN firmware_builds b ON b.release_id=r.id ORDER BY r.created_at DESC LIMIT 100",
     )
     .all()
     .map((r) => ({ ...r, manifest: JSON.parse(r.manifest) }));
@@ -88,6 +88,24 @@ export function firmwareReleases(store) {
 export function proposeFirmware(store, releaseId, actor) {
   const release = store.db.prepare('SELECT * FROM firmware_releases WHERE id=?').get(id.parse(releaseId));
   if (!release) throw new Rejected('Utgivelsen finnes ikke', 404);
+  const build = store.db
+    .prepare("SELECT payload FROM firmware_builds WHERE release_id=? AND state='ready'")
+    .get(release.id);
+  if (build) {
+    const payload = JSON.parse(build.payload);
+    if (
+      !store.db
+        .prepare(
+          'SELECT 1 FROM certificates WHERE id=? AND station_id=? AND revoked_at IS NULL AND expires_at>?',
+        )
+        .get(payload.certificateId, release.station_id, store.clock())
+    )
+      throw new Rejected('Byggets enhetssertifikat er utløpt eller tilbakekalt. Bygg firmware på nytt.');
+    if (payload.purpose !== 'ota')
+      throw new Rejected('Dette bygget er laget for USB. Velg nettverksoppdatering og bygg på nytt.');
+    if (hash(store.confirmedValue(`device:${release.station_id}`)) !== payload.baseHash)
+      throw new Rejected('Enhetsinnstillingene er endret. Bygg firmware på nytt.');
+  }
   const scope = `firmware:${release.station_id}`;
   store.initialize(scope, { stationId: release.station_id, releaseId: null });
   const current = store.current(scope),

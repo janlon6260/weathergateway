@@ -16,7 +16,7 @@ for (const env of ['production', 'development']) {
     image: '${WG_IMAGE:-janlon6260/weathergateway:latest}',
     restart: 'unless-stopped',
     init: true,
-    user: '10001:10001',
+    user: '70001:70007',
     read_only: true,
     cap_drop: ['ALL'],
     security_opt: ['no-new-privileges:true'],
@@ -90,7 +90,7 @@ for (const env of ['production', 'development']) {
   };
   const publicApi = {
     ...base,
-    user: '10002:10001',
+    user: '70001:70007',
     environment: { ...shared, WG_ROLE: 'public', WG_READ_TOKEN_FILE: '/run/credentials/read-token' },
     volumes: [bind(`${root}/public`, '/data'), bind(`${secrets}/roles/public`, '/run/credentials')],
     ports: [`127.0.0.1:${port}:8080`],
@@ -100,7 +100,7 @@ for (const env of ['production', 'development']) {
   const broker = {
     image: 'eclipse-mosquitto:2.1.2-alpine',
     restart: 'unless-stopped',
-    user: '1883:10001',
+    user: '70001:70007',
     read_only: true,
     cap_drop: ['ALL'],
     security_opt: ['no-new-privileges:true'],
@@ -125,9 +125,7 @@ for (const env of ['production', 'development']) {
   };
   const prepare = {
     ...base,
-    user: '0:0',
     restart: 'no',
-    cap_add: ['CHOWN', 'FOWNER', 'DAC_OVERRIDE'],
     command: ['node', 'scripts/prepare-container.js'],
     environment: { WG_ENVIRONMENT: env, WG_DATA_ROOT: '/data', WG_CERTIFICATE_ROOT: '/certificates' },
     volumes: [bind(root, '/data', false, true), bind(secrets, '/certificates', false, true)],
@@ -139,7 +137,34 @@ for (const env of ['production', 'development']) {
     JSON.stringify(
       {
         name: `wg-${env}`,
-        services: { prepare, control, worker, public: publicApi, broker },
+        services: {
+          prepare,
+          control,
+          worker,
+          public: publicApi,
+          broker,
+          'firmware-builder': {
+            image: '${WG_FIRMWARE_BUILDER_IMAGE:-janlon6260/weathergateway:firmware-builder}',
+            user: '70001:70007',
+            init: true,
+            restart: 'unless-stopped',
+            read_only: true,
+            cap_drop: ['ALL'],
+            security_opt: ['no-new-privileges:true'],
+            network_mode: 'none',
+            environment: { WG_ENVIRONMENT: env },
+            mem_limit: '3g',
+            cpus: '2.0',
+            pids_limit: 256,
+            tmpfs: ['/tmp:rw,nosuid,size=256m'],
+            volumes: [
+              bind(`${root}/system/firmware-builds`, '/jobs', false),
+              bind(`${root}/system/firmware-build-cache`, '/workspace', false),
+            ],
+            depends_on: { prepare: { condition: 'service_completed_successfully' } },
+            logging: base.logging,
+          },
+        },
         networks: { control: {}, public: {}, ingest: {} },
       },
       null,

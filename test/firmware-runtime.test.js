@@ -16,6 +16,7 @@ const compiler =
 for (const [source, expected] of [
   ['radio-lifecycle.c', 'radio lifecycle'],
   ['mqtt-lifecycle.c', 'MQTT lifecycle'],
+  ['config-storage.c', 'OTA configuration storage'],
 ])
   test(`actual firmware ${source} handles boot failures and recovery`, { skip: !compiler }, () => {
     const directory = mkdtempSync(join(tmpdir(), 'wg-firmware-native-'));

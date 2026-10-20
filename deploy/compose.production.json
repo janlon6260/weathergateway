@@ -5,7 +5,7 @@
       "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
       "restart": "no",
       "init": true,
-      "user": "0:0",
+      "user": "70001:70007",
       "read_only": true,
       "cap_drop": [
         "ALL"
@@ -25,11 +25,6 @@
           "max-file": "3"
         }
       },
-      "cap_add": [
-        "CHOWN",
-        "FOWNER",
-        "DAC_OVERRIDE"
-      ],
       "command": [
         "node",
         "scripts/prepare-container.js"
@@ -68,7 +63,7 @@
       "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
       "restart": "unless-stopped",
       "init": true,
-      "user": "10001:10001",
+      "user": "70001:70007",
       "read_only": true,
       "cap_drop": [
         "ALL"
@@ -159,7 +154,7 @@
       "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
       "restart": "unless-stopped",
       "init": true,
-      "user": "10001:10001",
+      "user": "70001:70007",
       "read_only": true,
       "cap_drop": [
         "ALL"
@@ -240,7 +235,7 @@
       "image": "${WG_IMAGE:-janlon6260/weathergateway:latest}",
       "restart": "unless-stopped",
       "init": true,
-      "user": "10002:10001",
+      "user": "70001:70007",
       "read_only": true,
       "cap_drop": [
         "ALL"
@@ -307,7 +302,7 @@
     "broker": {
       "image": "eclipse-mosquitto:2.1.2-alpine",
       "restart": "unless-stopped",
-      "user": "1883:10001",
+      "user": "70001:70007",
       "read_only": true,
       "cap_drop": [
         "ALL"
@@ -377,6 +372,61 @@
       "depends_on": {
         "control": {
           "condition": "service_healthy"
+        }
+      }
+    },
+    "firmware-builder": {
+      "image": "${WG_FIRMWARE_BUILDER_IMAGE:-janlon6260/weathergateway:firmware-builder}",
+      "user": "70001:70007",
+      "init": true,
+      "restart": "unless-stopped",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "network_mode": "none",
+      "environment": {
+        "WG_ENVIRONMENT": "production"
+      },
+      "mem_limit": "3g",
+      "cpus": "2.0",
+      "pids_limit": 256,
+      "tmpfs": [
+        "/tmp:rw,nosuid,size=256m"
+      ],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/data/req/weathergateway/production/system/firmware-builds",
+          "target": "/jobs",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/data/req/weathergateway/production/system/firmware-build-cache",
+          "target": "/workspace",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ],
+      "depends_on": {
+        "prepare": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
         }
       }
     }

@@ -11,8 +11,8 @@ const data = resolve(process.env.WG_DATA_ROOT || '/data'),
 const currentUid = process.getuid?.(),
   currentGid = process.getgid?.();
 const rootMode = currentUid === 0;
-const targetUid = currentUid > 0 ? currentUid : 10001;
-const targetGid = !rootMode && currentGid !== undefined ? currentGid : 10001;
+const targetUid = currentUid > 0 ? currentUid : 70001;
+const targetGid = !rootMode && currentGid !== undefined ? currentGid : 70007;
 for (const root of [data, certificates]) {
   if (root === parse(root).root) throw Error('Rotstien kan ikke brukes som datamappe');
   let path = root;
@@ -24,6 +24,8 @@ for (const root of [data, certificates]) {
 for (const [path, uid, mode] of [
   [data, targetUid, 0o750],
   [join(data, 'system'), targetUid, 0o750],
+  [join(data, 'system/firmware-builds'), targetUid, 0o700],
+  [join(data, 'system/firmware-build-cache'), targetUid, 0o700],
   [join(data, 'system/mqtt'), targetUid, 0o750],
   [join(data, 'system/mqtt/data'), rootMode ? 1883 : targetUid, 0o750],
   [join(data, 'public'), targetUid, 0o750],

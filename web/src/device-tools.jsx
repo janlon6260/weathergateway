@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { DeviceSerial, appendTerminal, prepareUsbBundle } from './device-serial.js';
+import { FirmwareBuilder } from './firmware-builder.jsx';
 
-export function DeviceTools({ stations, environment, admin, api, initialStationId, onBusy }) {
+export function DeviceTools({ stations, environment, admin, api, initialStationId, onBusy, onDeploy }) {
   const available = stations.filter((s) => s.value.enabled && s.value.model !== 'Netatmo');
   const [stationId, setStationId] = useState(initialStationId || available[0]?.value.id || '');
   const [source, setSource] = useState('usb'),
@@ -12,6 +13,7 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
   const [bundle, setBundle] = useState(null),
     [checked, setChecked] = useState(false),
     [progress, setProgress] = useState(0);
+  const [serverBuildId, setServerBuildId] = useState(null);
   const [network, setNetwork] = useState(false),
     [networkState, setNetworkState] = useState(''),
     [baud, setBaud] = useState(115200);
@@ -53,6 +55,7 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
   }, [initialStationId]);
   useEffect(() => {
     setBundle(null);
+    setServerBuildId(null);
     setChecked(false);
   }, [stationId, environment]);
   useEffect(() => {
@@ -146,6 +149,7 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
   }
   async function load(file) {
     setBundle(null);
+    setServerBuildId(null);
     setChecked(false);
     if (!file) return;
     if (file.size > 3000000) throw new Error('USB-pakken er for stor (maks. 3 MB).');
@@ -207,6 +211,26 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
             {error}
           </p>
         )}
+        {admin && stationId && (
+          <FirmwareBuilder
+            key={`${environment}:${stationId}`}
+            stationId={stationId}
+            api={api}
+            busy={busy}
+            onDeploy={onDeploy}
+            onUsbReady={async (input, buildId) => {
+              const prepared = await prepareUsbBundle(input, stationId, environment);
+              await apiRef.current(`/devices/${stationId}/flash/verify`, {
+                manifest: prepared.manifest,
+                signature: prepared.signature,
+              });
+              setBundle(prepared);
+              setServerBuildId(buildId);
+              setChecked(false);
+              setSource('usb');
+            }}
+          />
+        )}
         {source === 'usb' ? (
           <>
             {!usbAvailable && (
@@ -248,8 +272,8 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
               <div className="usb-flash-box">
                 <h3>Flash ESP32 via USB</h3>
                 <p>
-                  Velg en signert USB-pakke for stasjonen. Pakken inneholder også bootloader og
-                  partisjonstabell.
+                  Bruk serverbygget ovenfor, eller velg en eksisterende signert USB-pakke. Bootloader og
+                  partisjonstabell følger med.
                 </p>
                 <label>
                   USB-pakke (.usb-flash.json)
@@ -294,6 +318,8 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
                             signature: bundle.signature,
                           }),
                       });
+                      if (serverBuildId)
+                        await apiRef.current(`/firmware-builds/${serverBuildId}/usb-complete`, {});
                       setChecked(false);
                     })
                   }
