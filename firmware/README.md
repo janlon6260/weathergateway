@@ -1,6 +1,6 @@
 # ESP-WROOM-32 / Davis
 
-ESP-IDF 6.0.2, ESP32 med 4 MB flash, uten krav til PSRAM. MQTT 1.1.0 og cJSON 1.7.19~2 er låst i `dependencies.lock`. CP2102 er USB/seriebrikken og sier ikke hvilken sikkerhetsrevisjon ESP32 har.
+ESP-IDF 6.0.2 / 6.1, ESP32 med 4 MB flash, uten krav til PSRAM. MQTT 1.1.0 og cJSON 1.7.19~2 er låst i `dependencies.lock`. CP2102 er USB/seriebrikken og sier ikke hvilken sikkerhetsrevisjon ESP32 har.
 
 ## Radio og IP
 
@@ -13,12 +13,14 @@ Gateway kan angis med IP eller DNS-navn. IP må stå som **IP-SAN** i brokerens 
 1. Last ned unik enhetspakke fra riktig stasjon og miljø. Behold den beskyttet: den inneholder privatnøkkel og stasjonsidentitet og trengs ved senere bygg.
 2. Sett `WG_WIFI_SSID` og `WG_WIFI_PASSWORD` i prosessmiljøet. Ikke legg dem i Git eller kommandologg.
 3. Kjør `node scripts/provision-firmware.js /beskyttet/enhetspakke.json` fra prosjektroten. Git-ignorerte `provisioning.h`, CA, enhetssertifikat og nøkkel skrives til `firmware/main`. Erstatning krever `WG_REPLACE_PROVISIONING=true`.
-4. Bygg i ESP-IDF 6.0.2 med `idf.py -C firmware build`, eller på denne Windows-maskinen `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-firmware.ps1`. Det siste bruker `build-short` og SDK under `.tools`.
+4. Bygg i ESP-IDF 6.0.2 eller 6.1 med `idf.py -C firmware -B firmware/build-short build`, eller `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-firmware.ps1`. Skriptet bruker SDK fra `-SdkPath`, deretter aktivt `IDF_PATH`, ellers lokal `.tools/esp-idf`. Behold separate byggmapper ved bytte av SDK/Python (for eksempel `-BuildDirectory build-idf61`).
 5. Kontroller begge 1,5 MB OTA-slots. Vanlig utviklingsbygg aktiverer ikke Secure Boot eller flashkryptering.
 
 `node scripts/firmware-build-check.js` oppretter utviklingsidentiteter for `.invalid`, bare for kompilering. Disse kan ikke autentisere mot produksjon og skal ikke flashes som produksjonsfirmware. Ingen fysisk flashing er utført i denne økten.
 
 ## Første sikkerhetsprovisjonering
+
+Se [feilsøking av bygg og første oppstart](../docs/firmware-troubleshooting.md) ved DNS-, GPIO- eller radioproblemer. Fastvaren identifiserer seg som 2.1.1 og beholder applikasjonens INFO-logger også ved gjenbruk av eldre `sdkconfig` med WARN-nivå.
 
 [sdkconfig.production.defaults](sdkconfig.production.defaults) og [partitions.production.csv](partitions.production.csv) klargjør Secure Boot V2, flashkryptering i release-modus og NVS-kryptering for **fysisk verifisert ESP32 revision 3.0+**. NVS-nøkkelpartisjonen er separat og kryptert. Partisjonstabell/NVS flyttes; denne profilen er en førsteprovisjonering, ikke en OTA-migrasjon fra vanlig utviklingspartisjonering.
 

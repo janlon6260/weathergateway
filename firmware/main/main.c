@@ -30,6 +30,7 @@
 #include "wg_spool.h"
 #include "wg_credentials.h"
 #include "wg_logs.h"
+#include "wg_mqtt_lifecycle.h"
 #include "provisioning.h"
 
 #if !CONFIG_MQTT_PROTOCOL_5
@@ -58,6 +59,8 @@ static persistent_t state;
 static config_t current;
 static nvs_handle_t nvs;
 static esp_mqtt_client_handle_t mqtt;
+static wg_mqtt_lifecycle_t mqtt_lifecycle;
+static volatile bool clock_synchronized;
 static QueueHandle_t commands;
 static EventGroupHandle_t network_events;
 static volatile bool connected, new_connection, telemetry_acked;
@@ -128,6 +131,14 @@ static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void 
   switch (event_id) {
     case MQTT_EVENT_CONNECTED: connected = true; new_connection = true; ESP_LOGI(TAG, "MQTT connected with TLS and device certificate"); esp_mqtt_client_subscribe(event->client, command_topic, 1); esp_mqtt_client_subscribe(event->client, firmware_topic, 1); esp_mqtt_client_subscribe(event->client, receipt_topic, 1); break;
     case MQTT_EVENT_DISCONNECTED: connected = false; ESP_LOGW(TAG, "MQTT disconnected; observations remain in durable storage"); break;
+    case MQTT_EVENT_ERROR:
+      if (event->error_handle) {
+        const esp_mqtt_error_codes_t *error = event->error_handle;
+        if (error->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
+          ESP_LOGE(TAG, "MQTT/TLS failed for %s:%d: sdk=%s tls=0x%x verify=0x%x socket_errno=%d", current.host, current.port, esp_err_to_name(error->esp_tls_last_esp_err), (unsigned)error->esp_tls_stack_err, (unsigned)error->esp_tls_cert_verify_flags, error->esp_transport_sock_errno);
+        else ESP_LOGE(TAG, "MQTT broker refused connection: type=%d return_code=%d", (int)error->error_type, (int)error->connect_return_code);
+      }
+      break;
     case MQTT_EVENT_PUBLISHED: if (event->msg_id == telemetry_message_id) telemetry_acked = true; break;
     case MQTT_EVENT_DATA:
       if (event->current_data_offset == 0) {
@@ -142,7 +153,8 @@ static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void 
   }
 }
 static void reconnect(void) {
-  if (mqtt) { esp_mqtt_client_stop(mqtt); esp_mqtt_client_destroy(mqtt); mqtt = NULL; }
+  wg_mqtt_lifecycle_stop(&mqtt_lifecycle);
+  if (mqtt) { esp_mqtt_client_destroy(mqtt); mqtt = NULL; }
   connected = false; new_connection = false;
   telemetry_acked = false; telemetry_message_id = -1;
   if (!parse_config(configuration_json(), &current)) abort();
@@ -166,7 +178,9 @@ static void reconnect(void) {
     .session.last_will.retain = 1,
   };
   mqtt = esp_mqtt_client_init(&config); if (!mqtt) abort();
-  ESP_ERROR_CHECK(esp_mqtt_client_register_event(mqtt, ESP_EVENT_ANY_ID, mqtt_event, NULL)); ESP_ERROR_CHECK(esp_mqtt_client_start(mqtt));
+  mqtt_lifecycle = (wg_mqtt_lifecycle_t){.client = mqtt};
+  ESP_ERROR_CHECK(esp_mqtt_client_register_event(mqtt, ESP_EVENT_ANY_ID, mqtt_event, NULL));
+  ESP_LOGI(TAG, "MQTT configured: %s:%d; TLS peer verification enabled", current.host, current.port);
 }
 static int64_t expiry(const char *value) {
   if (!value || strlen(value) != 24 || value[23] != 'Z') return 0;
@@ -229,11 +243,34 @@ done:
   cJSON_Delete(o);
 }
 static void wifi_retry(void *arg) { (void)arg; esp_wifi_connect(); }
+static void clock_ready(struct timeval *now) {
+  clock_synchronized = now->tv_sec >= WG_MINIMUM_EPOCH;
+  if (clock_synchronized) ESP_LOGI(TAG, "NTP time synchronized; TLS certificate verification can proceed");
+  else ESP_LOGW(TAG, "NTP supplied an implausible date; MQTT/TLS remains stopped");
+}
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
-  (void)arg; (void)data;
+  (void)arg;
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) esp_wifi_connect();
-  else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) { ESP_LOGW(TAG, "Wi-Fi disconnected; reconnecting with backoff"); xEventGroupClearBits(network_events, 1); if (wifi_failures < 5) wifi_failures++; esp_timer_start_once(wifi_retry_timer, (1LL << wifi_failures) * 1000000LL); }
-  else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) { ESP_LOGI(TAG, "Wi-Fi connected and IP address acquired"); wifi_failures = 0; xEventGroupSetBits(network_events, 1); }
+  else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    wifi_event_sta_disconnected_t *event = data;
+    ESP_LOGW(TAG, "Wi-Fi disconnected: reason=%u; reconnecting with backoff", event ? (unsigned)event->reason : 0);
+    connected = false; xEventGroupClearBits(network_events, 1); if (wifi_failures < 5) wifi_failures++;
+    (void)esp_timer_stop(wifi_retry_timer); ESP_ERROR_CHECK(esp_timer_start_once(wifi_retry_timer, (1LL << wifi_failures) * 1000000LL));
+  }
+  else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    ip_event_got_ip_t *event = data;
+    if (event) ESP_LOGI(TAG, "Wi-Fi ready: IP=" IPSTR " gateway=" IPSTR, IP2STR(&event->ip_info.ip), IP2STR(&event->ip_info.gw));
+    esp_netif_dns_info_t dns;
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif && esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK && dns.ip.type == ESP_IPADDR_TYPE_V4)
+      ESP_LOGI(TAG, "DHCP DNS=" IPSTR, IP2STR(&dns.ip.u_addr.ip4));
+    (void)esp_timer_stop(wifi_retry_timer); wifi_failures = 0; xEventGroupSetBits(network_events, 1);
+    ESP_ERROR_CHECK(esp_netif_sntp_start());
+  }
+  else if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
+    connected = false; xEventGroupClearBits(network_events, 1);
+    ESP_LOGW(TAG, "DHCP IP address lost; MQTT paused until an address is restored");
+  }
 }
 static void emit_record(const wg_spool_record_t *record) {
   if (!connected) return;
@@ -243,7 +280,7 @@ static void emit_record(const wg_spool_record_t *record) {
     struct timeval tv; gettimeofday(&tv,NULL);
     epoch_ms = (int64_t)tv.tv_sec*1000+tv.tv_usec/1000-(esp_timer_get_time()-record->monotonic_us)/1000LL; mapped = true;
   } else if (!epoch_ms) undated = true;
-  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.1.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.1.1"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
   if (record->release_id[0]) cJSON_AddStringToObject(o,"firmwareReleaseId",record->release_id);
   if (wg_credentials_id()[0]) cJSON_AddStringToObject(o,"certificateId",wg_credentials_id());
   if (undated) { cJSON_AddNumberToObject(o,"monotonicUs",record->monotonic_us); cJSON_AddStringToObject(o,"reason","clock-unavailable-before-reboot"); }
@@ -286,7 +323,7 @@ static void configuration_watchdog(void *unused) {
   }
 }
 void app_main(void) {
-  esp_log_level_set("*", ESP_LOG_WARN); esp_log_level_set(TAG, ESP_LOG_INFO);
+  esp_log_level_set("*", ESP_LOG_WARN); esp_log_level_set(TAG, ESP_LOG_INFO); esp_log_level_set("davis_radio", ESP_LOG_INFO);
   setenv("TZ", "UTC0", 1); tzset();
   if (psa_crypto_init() != PSA_SUCCESS) abort();
   ESP_ERROR_CHECK(nvs_flash_init()); ESP_ERROR_CHECK(nvs_open("gateway", NVS_READWRITE, &nvs));
@@ -303,18 +340,20 @@ void app_main(void) {
   esp_timer_create_args_t retry_args = { .callback = wifi_retry, .name = "wifi-retry" }; ESP_ERROR_CHECK(esp_timer_create(&retry_args, &wifi_retry_timer));
   ESP_ERROR_CHECK(esp_netif_init()); ESP_ERROR_CHECK(esp_event_loop_create_default()); esp_netif_create_default_wifi_sta();
   wifi_init_config_t wifi = WIFI_INIT_CONFIG_DEFAULT(); ESP_ERROR_CHECK(esp_wifi_init(&wifi));
-  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL)); ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
+  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL)); ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
   wifi_config_t credentials = {0};
   if (strlen(WG_WIFI_SSID) > sizeof(credentials.sta.ssid) || strlen(WG_WIFI_PASSWORD) >= sizeof(credentials.sta.password)) abort();
   memcpy(credentials.sta.ssid, WG_WIFI_SSID, strlen(WG_WIFI_SSID));
   memcpy(credentials.sta.password, WG_WIFI_PASSWORD, strlen(WG_WIFI_PASSWORD));
   credentials.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &credentials)); ESP_ERROR_CHECK(esp_wifi_start());
-  esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org"); ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &credentials));
+  esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org"); sntp.start = false; sntp.sync_cb = clock_ready;
+  ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
+  ESP_ERROR_CHECK(esp_wifi_start());
   uint8_t random[16]; esp_fill_random(random, sizeof(random)); random[6] = (random[6] & 15) | 64; random[8] = (random[8] & 63) | 128;
   snprintf(boot_id, sizeof(boot_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", random[0],random[1],random[2],random[3],random[4],random[5],random[6],random[7],random[8],random[9],random[10],random[11],random[12],random[13],random[14],random[15]);
   wg_logs_init(boot_id);
-  ESP_LOGI(TAG, "WeatherGateway 2.1.0 started; station %s", WG_STATION_ID);
+  ESP_LOGI(TAG, "WeatherGateway 2.1.1 started; station %s", WG_STATION_ID);
   snprintf(command_topic, sizeof(command_topic), "wg/v1/%s/stations/%s/commands", WG_ENVIRONMENT, WG_STATION_ID); snprintf(telemetry_topic, sizeof(telemetry_topic), "wg/v1/%s/stations/%s/telemetry", WG_ENVIRONMENT, WG_STATION_ID); snprintf(ack_topic, sizeof(ack_topic), "wg/v1/%s/stations/%s/acks", WG_ENVIRONMENT, WG_STATION_ID); snprintf(status_topic, sizeof(status_topic), "wg/v1/%s/stations/%s/status", WG_ENVIRONMENT, WG_STATION_ID);
   snprintf(firmware_topic,sizeof(firmware_topic),"wg/v1/%s/stations/%s/firmware-data",WG_ENVIRONMENT,WG_STATION_ID);
   snprintf(receipt_topic,sizeof(receipt_topic),"wg/v1/%s/stations/%s/telemetry-receipt",WG_ENVIRONMENT,WG_STATION_ID);
@@ -324,6 +363,7 @@ void app_main(void) {
   command_t command; uint8_t packet[99];
   while (true) {
     int64_t now = esp_timer_get_time();
+    wg_mqtt_lifecycle_tick(&mqtt_lifecycle, (xEventGroupGetBits(network_events) & 1) != 0, clock_synchronized && time(NULL) >= WG_MINIMUM_EPOCH, now);
     if (state.pending && (time(NULL) >= state.deadline || time(NULL) < state.last_epoch || now >= lease_monotonic)) rollback();
     bool reconnected = new_connection; new_connection = false;
     if (reconnected && state.last_command[0]) ack(state.last_command, state.last_status);

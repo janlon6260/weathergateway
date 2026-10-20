@@ -25,6 +25,7 @@ node_modules/
 /firmware/build-short/
 /firmware/build-local/
 /firmware/build-production/
+/firmware/build-idf61/
 /firmware/sdkconfig.production
 /firmware/sdkconfig.production.old
 /firmware/sdkconfig.production-key.defaults
