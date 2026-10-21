@@ -24,7 +24,7 @@ Vanlig installasjon gjøres nå i **Enheter → Bygg firmware på serveren**: an
 
 ## Første sikkerhetsprovisjonering
 
-Se [feilsøking av bygg og første oppstart](../docs/firmware-troubleshooting.md) ved DNS-, GPIO- eller radioproblemer. Fastvaren identifiserer seg som 2.4.2 og beholder applikasjonens INFO-logger også ved gjenbruk av eldre `sdkconfig` med WARN-nivå. Radioen kjøres separat fra MQTT, med mottaksdiagnostikk i adminpanelet og USB-/MQTT-loggen.
+Se [feilsøking av bygg og første oppstart](../docs/firmware-troubleshooting.md) ved DNS-, GPIO- eller radioproblemer. Fastvaren identifiserer seg som 2.4.3 og beholder applikasjonens INFO-logger også ved gjenbruk av eldre `sdkconfig` med WARN-nivå. Radioen kjøres separat fra MQTT, med mottaksdiagnostikk i adminpanelet og USB-/MQTT-loggen. RSSI-triggeren kan velges per stasjon, og standard −85 dBm følger Davis-referansemottakeren. Signal uten ferdig pakke gir kontrollert RX-omstart; PLL, frekvens, AFC og siste avviste råpakke rapporteres.
 
 [sdkconfig.production.defaults](sdkconfig.production.defaults) og [partitions.production.csv](partitions.production.csv) klargjør Secure Boot V2, flashkryptering i release-modus og NVS-kryptering for **fysisk verifisert ESP32 revision 3.0+**. NVS-nøkkelpartisjonen er separat og kryptert. Partisjonstabell/NVS flyttes; denne profilen er en førsteprovisjonering, ikke en OTA-migrasjon fra vanlig utviklingspartisjonering.
 

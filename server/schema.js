@@ -256,6 +256,8 @@ export const radioDeviceSchema = z
     radioCs: gpio,
     radioReset: gpio,
     radioDio0: gpio,
+    // Optional to preserve hashes of confirmed pre-2.4.3 configurations.
+    radioRssiThresholdDbm: z.number().int().min(-120).max(-40).optional(),
   })
   .strict()
   .refine(

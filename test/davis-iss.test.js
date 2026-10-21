@@ -143,6 +143,17 @@ test('radio configuration rejects duplicate, strapping and flash pins and unsupp
   const { store } = setup(t),
     config = store.configurations('device:')[0].value;
   assert.equal(radioDeviceSchema.parse(config).radioBand, 'EU868');
+  assert.equal(
+    radioDeviceSchema.parse({ ...config, radioRssiThresholdDbm: -108 }).radioRssiThresholdDbm,
+    -108,
+  );
+  const legacyConfig = { ...config };
+  delete legacyConfig.radioRssiThresholdDbm;
+  assert.equal(
+    Object.hasOwn(radioDeviceSchema.parse(legacyConfig), 'radioRssiThresholdDbm'),
+    false,
+    'old confirmed configuration hashes must stay unchanged',
+  );
   for (const edit of [
     { spiSck: 5 },
     { spiMiso: 6 },
@@ -150,6 +161,9 @@ test('radio configuration rejects duplicate, strapping and flash pins and unsupp
     { transmitterId: 0 },
     { transmitterId: 9 },
     { radioBand: 'US915' },
+    { radioRssiThresholdDbm: -121 },
+    { radioRssiThresholdDbm: -39 },
+    { radioRssiThresholdDbm: -85.5 },
   ])
     assert.equal(radioDeviceSchema.safeParse({ ...config, ...edit }).success, false);
 });

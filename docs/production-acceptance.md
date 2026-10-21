@@ -14,13 +14,14 @@ Lokale tester kjøres i prosjektet, ikke i DockerHub-workflowen. DockerHub bygge
 | Offentlig SQLite-kopi                        | Oppstart uten skriver og uten opprettingsrettigheter, migrasjon fra WAL og videre lesing av nye værdata bestått              |
 | Produksjonsavhengigheter                     | `npm audit --omit=dev`: 0 kjente sårbarheter                                                                                 |
 | Faktisk køkode i C                           | Kapasitet, 400 poster med omløp, 74 avbrutte skriveposisjoner og checkpoint-/sektorslettingsbrudd bestått                    |
-| ESP-IDF 6.1 / firmware 2.4.2                 | Radio 1 090 720 byte, MAX3485 1 090 656 byte; signatur og alle fire USB-segmenter verifisert                                 |
+| ESP-IDF 6.1 / firmware 2.4.3                 | Radio 1 092 864 byte, MAX3485 1 092 768 byte; signatur og alle fire USB-segmenter verifisert                                 |
 | RFM69-timing og levering                     | Åtte ID-er × 20 simulerte minutter, FIFO-feil, utfall, blokkert forbruker og ekte MQTT med 2,5 s intervall bestått             |
+| RFM69-mottakerprofil                         | Justerbar RSSI-trigger, signalfrist, avvist råpakke/AFC, PLL-frist og frekvenskontroll bestått i vertsmodell og kompilering    |
 | Tredjeparts-API                              | Administratorgodkjenning, Origin, polling/WebSocket, stasjonsvalg, utløp, nøkkelbytte, tilbakekalling og policyfrist bestått |
 | MAX3485 ISS                                  | Faktisk C-kode, UART-feil og rammegrenser, seksbytes værdekoding, varig MQTT-kvittering, SQL-kø og OTA-overgang bestått      |
 | Sikkerhetsprofil                             | ESP-IDF-konfigurasjon og produksjonspartisjonstabell validert; ingen sikkerhetsfirmware flashet eller eFuses endret          |
 
-Den siste fullrapporten ligger lokalt i git-ignorert `artifacts/test-results-20261021-radio.txt`. Den utvidede MQTT-kjøringen etterpå ligger i `artifacts/radio-delivery-integration.txt`. Nettleser- og byggresultater finnes i `artifacts/access-wind-verification.json`, `artifacts/server-build-verification.json` og `artifacts/rs485-build-verification.json`. Testidentiteter og verktøy under `.tools`/`artifacts` inngår ikke i Docker-imaget. Disse resultatene gjelder lokale kontroller, ikke produksjonsgodkjenning av målutstyret.
+Den siste fullrapporten ligger lokalt i git-ignorert `artifacts/test-results-20261021-rf243.txt`. Den omfatter også ekte MQTT med 2,5-sekunders ISS-intervall. Nettleser- og byggresultater finnes i `artifacts/access-wind-verification.json`, `artifacts/server-build-verification.json` og `artifacts/rs485-build-verification.json`. Testidentiteter og verktøy under `.tools`/`artifacts` inngår ikke i Docker-imaget. Disse resultatene gjelder lokale kontroller, ikke produksjonsgodkjenning av målutstyret. Eierens 2.4.2-logg viser fortsatt RF-feil; forbedring på fysisk radio med 2.4.3 gjenstår å kontrollere.
 
 ## Reproduser lokale kontroller
 
@@ -35,7 +36,7 @@ To integrasjonstester krever lokale kjørbare serverfiler. Sett `WG_MOSQUITTO_BI
 
 På denne maskinen ligger verktøyene i git-ignorert `.tools/verification`. En full kjøring omfatter faktisk mTLS, IP-SAN, stasjons-ACL, gatewayens lagringskvitteringer, fire eksisterende SQL-skjemaer, NULL-migrasjon, utvidede værfelt og gjentakelse etter usikkert commit-resultat. Vertsbasert C-feilinjeksjon finnes i `test/spool-faults.c`; den inkluderer den faktiske firmwarekøens C-kilde og simulerer strømkutt under skriving/sletting/checkpoint.
 
-React er prøvd med Edge på desktop og 390-pikslers mobilvisning, inkludert vindpil/Beaufort, radiodiagnostikk og oppretting, nøkkelbytte og tilbakekalling av tilkoblinger. Testadapteren for AD finnes bare i testoppsettet. ESP32 2.4.2 er kompilert med ESP-IDF 6.1 og passer i begge OTA-slots; ingen fysisk enhet er flashet. Den sikre førsteprovisjoneringsprofilen krever faktisk revisjonskontroll og beholdte produksjonsnøkler.
+React er prøvd med Edge på desktop og 390-pikslers mobilvisning, inkludert vindpil/Beaufort, radiodiagnostikk/RSSI-valg og oppretting, nøkkelbytte og tilbakekalling av tilkoblinger. Testadapteren for AD finnes bare i testoppsettet. ESP32 2.4.3 er kompilert med ESP-IDF 6.1 og passer i begge OTA-slots; ingen fysisk enhet er flashet her. Den sikre førsteprovisjoneringsprofilen krever faktisk revisjonskontroll og beholdte produksjonsnøkler.
 
 ## Gjennomfør på målutstyret
 
@@ -56,4 +57,4 @@ Registrer faktisk utførelse/resultat i **Produksjonsstatus**. Manuelle oppføri
 
 Den tidligere NULL-migrasjonen skal ikke kjøres ved denne oppgraderingen; opprinnelige Weather Display-skjemaer beholdes. Se [oppgraderingen](operations-20261021.md). Produksjonstabeller og eFuses er ikke endret fra denne utviklingsøkten. Ingen tilgjengelig SSH-/Docker-host eller fysisk ESP32 finnes nå; akseptanse på målutstyret gjenstår.
 
-Firmware 2.4.2 er kompilert gjennom serverbyggingen for både radio og kablet ISS / MAX3485, med signatur og alle fire USB-segmenter kontrollert. Nye SMTP-/varselskjemaer, beholdte værverdier, feltalder, radiodiagnostikk og verktøyfaner er også prøvd i Edge på desktop og mobil. Fysisk USB-kvittering og Docker-drift er fortsatt ikke tilgjengelig for verifisering her. Kablet ISS har en full værdatadriver, men faktisk strømforsyning, kabel/polaritet og målesammenligning må fortsatt prøves på målutstyret. Se [MAX3485-veiledningen](davis-rs485.md).
+Firmware 2.4.3 er kompilert gjennom serverbyggingen for både radio og kablet ISS / MAX3485, med signatur og alle fire USB-segmenter kontrollert. Nye SMTP-/varselskjemaer, beholdte værverdier, feltalder, radiodiagnostikk/RSSI-valg og verktøyfaner er også prøvd i Edge på desktop og mobil. Fysisk USB-kvittering og Docker-drift er fortsatt ikke tilgjengelig for verifisering her. Kablet ISS har en full værdatadriver, men faktisk strømforsyning, kabel/polaritet og målesammenligning må fortsatt prøves på målutstyret. Se [MAX3485-veiledningen](davis-rs485.md).

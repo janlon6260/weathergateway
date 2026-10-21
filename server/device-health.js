@@ -68,6 +68,22 @@ export const deviceHealthSchema = z
         queuedPackets: counter,
         queueDropped: counter,
         lastPacketAgeMs: counter,
+        rssiThresholdDbm: z.number().int().min(-120).max(-40).optional(),
+        backgroundRssiDbm: z.number().int().min(-127).max(0).optional(),
+        afcHz: z.number().int().min(-2000000).max(2000000).optional(),
+        signalTimeouts: counter,
+        pllTimeouts: counter,
+        lastRejected: z
+          .object({
+            reason: z.enum(['crc', 'repeater', 'transmitter-id']).optional(),
+            packetHex: z.string().regex(/^[a-f0-9]{20}$/),
+            channel: z.number().int().min(1).max(5),
+            rssiDbm: z.number().int().min(-127).max(0),
+            afcHz: z.number().int().min(-2000000).max(2000000),
+            ageMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -9,6 +9,7 @@ static int64_t clock_us;
 static uint64_t reserved;
 static int conflicts, configured, fail_gpio, fail_bus, fail_device, spi_fault, version_value=0x24;
 static bool bus_owned, device_owned;
+static unsigned char registers[128];
 const char *esp_err_to_name(esp_err_t error) { return error == ESP_OK ? "OK" : "TEST_ERROR"; }
 void host_log(const char *tag, const char *format, ...) { (void)tag; (void)format; }
 int64_t esp_timer_get_time(void) { return clock_us; }
@@ -37,9 +38,10 @@ esp_err_t spi_device_polling_transmit(spi_device_handle_t handle, spi_transactio
   assert(handle && device_owned);
   if (spi_fault) return ESP_FAIL;
   const unsigned char *tx=t->tx_buffer;
+  if (tx[0] & 0x80) registers[tx[0] & 127] = tx[1];
   if (t->rx_buffer && t->length == 16) {
     unsigned char *rx=t->rx_buffer; rx[0]=0;
-    rx[1]=tx[0] == 0x10 ? version_value : tx[0] == 0x27 ? 0x80 : 0;
+    rx[1]=tx[0] == 0x10 ? version_value : tx[0] == 0x27 ? 0x90 : registers[tx[0]];
   }
   return ESP_OK;
 }

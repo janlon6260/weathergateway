@@ -17,6 +17,7 @@ export function deviceProfile(current, kind) {
       radioCs: 27,
       radioReset: 14,
       radioDio0: 26,
+      radioRssiThresholdDbm: -85,
     };
   if (kind === 'davis-iss-rs485')
     return { ...base, interface: kind, uartRx: 16, uartBaud: '4800', rs485De: 25, rs485Re: 26 };

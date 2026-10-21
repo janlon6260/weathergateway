@@ -114,6 +114,29 @@ export function DeviceHealth({ health, now }) {
                 {health.radio.queuedPackets ?? 0} / {health.radio.queueDropped ?? 0} /{' '}
                 {health.radio.maxPollGapMs ?? 0} ms
               </dd>
+              <dt>RSSI-trigger / signal mellom pakker</dt>
+              <dd>
+                {health.radio.rssiThresholdDbm ?? '–'} / {health.radio.backgroundRssiDbm ?? '–'} dBm
+              </dd>
+              <dt>Signal uten pakke / PLL-feil</dt>
+              <dd>
+                {health.radio.signalTimeouts ?? '–'} / {health.radio.pllTimeouts ?? '–'}
+              </dd>
+              <dt>Frekvenskorreksjon (AFC)</dt>
+              <dd>{health.radio.afcHz === undefined ? '–' : `${health.radio.afcHz} Hz`}</dd>
+              {health.radio.lastRejected && (
+                <>
+                  <dt>Siste avviste radiopakke</dt>
+                  <dd className="monospace small">
+                    {health.radio.lastRejected.reason || '–'}: {health.radio.lastRejected.packetHex}
+                  </dd>
+                  <dt>Avvist: kanal / RSSI / AFC</dt>
+                  <dd>
+                    {health.radio.lastRejected.channel} / {health.radio.lastRejected.rssiDbm} dBm /{' '}
+                    {health.radio.lastRejected.afcHz} Hz
+                  </dd>
+                </>
+              )}
             </>
           )}
           <dt>Tapte innkommende MQTT-meldinger</dt>

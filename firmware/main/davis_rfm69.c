@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
+#include <stdio.h>
 
 static const uint32_t eu_channels[] = {0xd90445, 0xd91304, 0xd921c2, 0xd90ba4, 0xd91a63};
 static const spi_host_device_t host = SPI2_HOST;
@@ -23,6 +24,7 @@ static int channel_index, missed;
 static int64_t expected_at, scan_at, received_at, retry_at;
 static int64_t interval_us;
 static int64_t last_poll_us;
+static int64_t background_at;
 static davis_radio_stats_t stats;
 
 static void fault(void) { ready = false; retry_at = esp_timer_get_time() / 1000 + 30000; }
@@ -59,8 +61,24 @@ static bool receive_on(int channel) {
   channel_index = channel % 5;
   uint32_t frequency = eu_channels[channel_index];
   // Retuning only in standby; clear incomplete/bad packets before resuming.
-  return standby() && reg_write(0x07, frequency >> 16) && reg_write(0x08, frequency >> 8) &&
-    reg_write(0x09, frequency) && reg_write(0x28, 0x10) && reg_write(0x3d, 0x16) && reg_write(0x01, 0x10);
+  if (!standby() || !reg_write(0x07, frequency >> 16) || !reg_write(0x08, frequency >> 8) ||
+      !reg_write(0x09, frequency) || !reg_write(0x01, 0x08)) return false;
+  // Explicitly relock the synthesizer before RX (datasheet 4.2.5). A successful
+  // SPI write alone is not evidence that the receiver reached the new channel.
+  const int64_t deadline = esp_timer_get_time() + 50000;
+  for (;;) {
+    uint8_t flags;
+    if (!reg_read(0x27, &flags)) return false;
+    if ((flags & 0x90) == 0x90) break;
+    if (esp_timer_get_time() >= deadline) { stats.pll_timeouts++; fault(); return false; }
+    vTaskDelay(1);
+  }
+  uint8_t a, b, c;
+  if (!reg_read(0x07, &a) || !reg_read(0x08, &b) || !reg_read(0x09, &c)) return false;
+  if ((((uint32_t)a << 16) | ((uint32_t)b << 8) | c) != frequency) {
+    stats.spi_errors++; fault(); return false;
+  }
+  return reg_write(0x28, 0x10) && reg_write(0x3d, 0x12) && reg_write(0x01, 0x10);
 }
 void davis_radio_stop(void) {
   if (radio) { (void)reg_write(0x01, 0x04); spi_bus_remove_device(radio); radio = NULL; }
@@ -77,6 +95,7 @@ static bool init_failed(const char *stage, esp_err_t error) {
 }
 bool davis_radio_init(const davis_radio_config_t *config) {
   if (!config || config->transmitter_id < 1 || config->transmitter_id > 8) return false;
+  if (config->rssi_threshold_dbm && (config->rssi_threshold_dbm < -120 || config->rssi_threshold_dbm > -40)) return false;
   int assigned[] = {config->sck, config->miso, config->mosi, config->cs, config->reset, config->dio0};
   for (unsigned i = 0; i < 6; i++) {
     if (!valid_pin(assigned[i])) return false;
@@ -84,6 +103,7 @@ bool davis_radio_init(const davis_radio_config_t *config) {
   }
   davis_radio_config_t proposed = *config;
   davis_radio_stop(); pins = proposed;
+  stats.rssi_threshold_dbm = pins.rssi_threshold_dbm ? pins.rssi_threshold_dbm : -85;
   retry_at = esp_timer_get_time() / 1000 + 30000;
   gpio_config_t outputs = {.pin_bit_mask = 1ULL << pins.reset, .mode = GPIO_MODE_OUTPUT};
   gpio_config_t input = {.pin_bit_mask = 1ULL << pins.dio0, .mode = GPIO_MODE_INPUT};
@@ -119,9 +139,10 @@ bool davis_radio_init(const davis_radio_config_t *config) {
     {0x0b, 0x00}, {0x11, 0x00}, // No power amplifier enabled
     {0x18, 0x00}, {0x19, 0x4c}, {0x1a, 0x4b}, // 50 ohm, RX 25 kHz / AFC 50 kHz
     {0x1e, 0x0c}, // Automatic AFC, clear for each packet
-    {0x25, 0x40}, {0x29, 228}, // DIO0 PayloadReady; datasheet default -114 dBm threshold
+    {0x25, 0x40}, {0x29, (uint8_t)(-2 * stats.rssi_threshold_dbm)}, // Davis reference: -85 dBm, configurable
+    {0x2a, 0x00}, {0x2b, 32}, // No idle timeout; signal without payload times out after ~26.7 ms
     {0x2c, 0x00}, {0x2d, 0x04},
-    {0x2e, 0x88}, {0x2f, 0xcb}, {0x30, 0x89}, // Exact 2-byte Davis sync
+    {0x2e, 0x8a}, {0x2f, 0xcb}, {0x30, 0x89}, // Reference sync tolerance: two bits; payload CRC remains mandatory
     {0x37, 0x00}, {0x38, 10}, // Fixed ten-byte payload, manual CRC
     {0x3c, 0x09}, {0x3d, 0x12}, {0x6f, 0x30}, {0x71, 0x00},
   };
@@ -129,12 +150,13 @@ bool davis_radio_init(const davis_radio_config_t *config) {
     if (!reg_write(registers[i][0], registers[i][1])) return init_failed("register configuration", ESP_FAIL);
   ready = true; locked = false; missed = 0; received_at = 0;
   last_poll_us = esp_timer_get_time();
+  background_at = last_poll_us / 1000 + 500;
   // ID 1 has wire ID 0. Timer uses microseconds internally below to retain
   // the exact 62.5 ms increment rather than accumulating rounded periods.
   interval_us = 2500000LL + (pins.transmitter_id - 1) * 62500LL;
   scan_at = esp_timer_get_time() / 1000 + 16000;
   if (!receive_on(0)) return init_failed("receiver", ESP_FAIL);
-  ESP_LOGI(TAG, "RFM69 ready: EU868, ISS ID %d", pins.transmitter_id);
+  ESP_LOGI(TAG, "RFM69 ready: EU868, ISS ID %d, RSSI trigger=%d dBm, signal timeout=26.7 ms", pins.transmitter_id, stats.rssi_threshold_dbm);
   return true;
 }
 static uint8_t reverse_bits(uint8_t byte) {
@@ -148,9 +170,9 @@ static bool valid_frame(const uint8_t packet[10]) {
     crc ^= (uint16_t)packet[i] << 8;
     for (int bit = 0; bit < 8; bit++) crc = (uint16_t)((crc << 1) ^ ((crc & 0x8000) ? 0x1021 : 0));
   }
-  if (crc) { stats.crc_errors++; return false; }
-  if (packet[8] != 255 || packet[9] != 255) { stats.repeater_packets++; return false; }
-  if ((packet[0] & 7) != pins.transmitter_id - 1) { stats.foreign_packets++; return false; }
+  if (crc) { stats.crc_errors++; stats.last_bad_reason = 1; return false; }
+  if (packet[8] != 255 || packet[9] != 255) { stats.repeater_packets++; stats.last_bad_reason = 2; return false; }
+  if ((packet[0] & 7) != pins.transmitter_id - 1) { stats.foreign_packets++; stats.last_bad_reason = 3; return false; }
   return true;
 }
 bool davis_radio_failed(int64_t now_ms) { return !ready || received_at == 0 || now_ms - received_at > 15000; }
@@ -181,8 +203,9 @@ bool davis_radio_poll(int64_t now_ms, uint8_t packet[10], int *channel, int *rss
     if (!receive_on(channel_index)) return false;
   }
   else if (flags & 0x04) {
-    uint8_t rssi, tx[11] = {0}, rx[11] = {0};
-    if (!reg_read(0x24, &rssi) || !standby()) return false;
+    uint8_t rssi, afc_msb, afc_lsb, tx[11] = {0}, rx[11] = {0};
+    if (!reg_read(0x24, &rssi) || !reg_read(0x1f, &afc_msb) || !reg_read(0x20, &afc_lsb) || !standby()) return false;
+    const int afc_hz = (int32_t)(int16_t)(((uint16_t)afc_msb << 8) | afc_lsb) * 32000000LL / 524288;
     spi_transaction_t t = {.length = sizeof(tx) * 8, .tx_buffer = tx, .rx_buffer = rx};
     if (spi_device_polling_transmit(radio, &t) != ESP_OK) { stats.spi_errors++; fault(); return false; }
     for (int i = 0; i < 10; i++) packet[i] = reverse_bits(rx[i + 1]);
@@ -191,11 +214,30 @@ bool davis_radio_poll(int64_t now_ms, uint8_t packet[10], int *channel, int *rss
       *channel = received_channel; *rssi_dbm = -(int)rssi / 2;
       received_at = now_ms; expected_at = now_ms * 1000 + interval_us;
       stats.packets++; stats.last_channel = received_channel; stats.last_rssi_dbm = *rssi_dbm;
+      stats.last_afc_hz = afc_hz;
       locked = true; missed = 0;
       if (!receive_on(received_channel + 1)) return false;
       return true;
     }
+    for (int i = 0; i < 10; i++) snprintf(stats.last_bad_packet_hex + 2*i, 3, "%02x", packet[i]);
+    stats.last_bad_ms = now_ms; stats.last_bad_channel = received_channel;
+    stats.last_bad_rssi_dbm = -(int)rssi / 2; stats.last_bad_afc_hz = afc_hz;
     if (!receive_on(received_channel)) return false;
+  } else {
+    uint8_t irq1;
+    if (!reg_read(0x27, &irq1)) return false;
+    // AGC/AFC can be triggered by interference with no subsequent complete
+    // packet. AutoRxRestart only runs after a drained payload, so handle the
+    // hardware signal timeout explicitly; retain the hop schedule and channel.
+    if (irq1 & 0x04) {
+      stats.receiver_timeouts++;
+      if (!receive_on(channel_index)) return false;
+    } else if (now_ms >= background_at && (!locked || now_us < expected_at - 50000)) {
+      uint8_t rssi;
+      if (!reg_read(0x24, &rssi)) return false;
+      stats.background_rssi_dbm = -(int)rssi / 2; stats.background_sampled = true;
+      background_at = now_ms + 500;
+    }
   }
   if (late) {
     // Catch up all elapsed slots in one poll, rather than hopping once per

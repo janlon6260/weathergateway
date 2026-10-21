@@ -1615,6 +1615,18 @@ function DeviceForm({ record, pending, save }) {
             <Field label="Radio CS GPIO" name="radioCs" type="number" item={item} set={set} />
             <Field label="Radio RST GPIO" name="radioReset" type="number" item={item} set={set} />
             <Field label="Radio G0 / DIO0 GPIO" name="radioDio0" type="number" item={item} set={set} />
+            <label>
+              RSSI-trigger (dBm)
+              <input
+                type="number"
+                required
+                min="-120"
+                max="-40"
+                value={item.radioRssiThresholdDbm ?? -85}
+                onChange={(e) => set({ ...item, radioRssiThresholdDbm: Number(e.target.value) })}
+              />
+              <small>Krever firmware 2.4.3. Lavere tall slipper inn svakere signaler og mer støy.</small>
+            </label>
           </>
         ) : item.interface === 'davis-iss-rs485' ? (
           <DeviceHardware value={item} onChange={set} />

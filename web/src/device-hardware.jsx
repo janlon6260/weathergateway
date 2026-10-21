@@ -85,6 +85,20 @@ export function DeviceHardware({ value, onChange }) {
             />
           </label>
         ))}
+        {mode === 'davis-iss-rfm69' && (
+          <label>
+            RSSI-trigger (dBm)
+            <input
+              type="number"
+              required
+              min="-120"
+              max="-40"
+              value={value.radioRssiThresholdDbm ?? -85}
+              onChange={(e) => set('radioRssiThresholdDbm', Number(e.target.value))}
+            />
+            <small>Standard −85 dBm. Lavere tall slipper inn svakere signaler og mer støy.</small>
+          </label>
+        )}
       </div>
     </fieldset>
   );

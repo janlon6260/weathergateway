@@ -39,6 +39,18 @@ Helsestatus hver femte sekund inneholder en separat `radio`-del med søk/sporing
 
 Registerbetydningene er kontrollert mot [HopeRF RFM69HCW V1.1](https://cdn-shop.adafruit.com/product-files/3076/RFM69HCW-V1.1.pdf). Davis-formatet bygger på den opprinnelige [RF-undersøkelsen](https://github.com/dekay/DavisRFM69/wiki/RF-Protocol), [pakkeundersøkelsen](https://github.com/dekay/DavisRFM69/wiki/Message-Protocol) og den fungerende [referansemottakeren](https://github.com/dekay/DavisRFM69/blob/master/DavisRFM69.cpp). Prosjektets driver er skrevet for ESP-IDF; AVR-/Arduino-biblioteket er ikke inkludert som avhengighet.
 
+### Mottakerprofil fra 2.4.3
+
+Den neste fysiske loggen fra 2.4.2 viste bare fem gyldige pakker og 55 CRC-feil ved 239 sekunder oppetid. Pollpausen var maksimalt 7 ms, uten SPI-feil, FIFO-overflyt eller køtap. Eier oppgir fem meters avstand og tilpasset 868 MHz-antenne. Det peker mot RF-mottaket fremfor nettverksblokkering, men loggen inneholder ikke råpakkene eller bakgrunnsstøyen og fastslår derfor ikke den fysiske årsaken.
+
+2.4.3 bruker de dokumenterte innstillingene i Davis-referansemottakeren: RSSI-trigger **−85 dBm** og to tillatte bitfeil i synkroniseringsordet. Davis-payloaden krever fortsatt korrekt CRC, riktig sender-ID og `FF FF`-avslutning; det utføres ingen reparasjon av værdata. Den tidligere fabrikktriggeren −114 dBm kunne starte AGC/AFC på svak støy før ISS-preambelen. Dette er en mulig mekanisme i dette tilfellet, ikke en målt forklaring på alle de avviste pakkene.
+
+**RSSI-trigger (dBm)** finnes både i serverbyggskjemaet og under enhetsinnstillinger. Området er −120 til −40 dBm, i hele dB. Mer negative verdier tar med svakere signaler og mer støy; mindre negative verdier kan stenge ute en svak stasjon. Standard −85 dBm følger referansedriveren og er ikke en universell terskel for alle installasjoner. Feltet heter `radioRssiThresholdDbm` og er valgfritt for å bevare hashene til eldre bekreftede konfigurasjoner. Ny firmware bruker −85 dBm når feltet mangler; eldre firmware får ikke nye felt automatisk. En eksplisitt terskel krever firmware 2.4.3. Innstillingen følger vanlig lagring, test/bekreftelse og tilbakeføring.
+
+Et RSSI-utslag uten en ferdig pakke får en maskinvarefrist: `RegRxTimeout2=32`, som er `32 × 16 / 19196 ≈ 26,7 ms`. Dette er lengre enn ISS-pakkens sendetid. Ved Timeout reinitialiseres mottak på samme kanal; hoppefasen beholdes. Tom kanal får ingen slik frist. Retuning går via FS, venter avgrenset på ModeReady/PLL og leser frekvensregistrene tilbake før RX. Dette bygger på databladets del 4.2.5 og registerbeskrivelsene 0x27/0x2A/0x2B.
+
+Helse og logger oppgir nå trigger, RSSI mellom pakker, signalfrister, PLL-feil og AFC-korreksjon i Hz. Siste avviste pakke har årsak (`crc`, `transmitter-id` eller `repeater`), 20 heksadesimale tegn, kanal, RSSI, AFC og alder. `RF:` og `Rejected:` skrives sammen med den femsekundsvise `RX:`-oppsummeringen. RSSI mellom pakker er en øyeblikksprøve utenfor forventet mottaksvindu, ikke en kalibrert støymåling; andre sendere kan påvirke prøven. CRC-feiltelleren alene er heller ikke en presis tapsprosent for den valgte ISS-en.
+
 ## Målinger og begrensninger
 
 Gatewayen dekoder den originale ISS-pakken; ESP32 lager ikke en kunstig WeatherLink LOOP-pakke. Hver gyldig radiopakke videresendes. `sampleSeconds` bestemmer kontaktmeldingsintervallet ved manglende mottak, ikke ISS-ens sendeintervall.

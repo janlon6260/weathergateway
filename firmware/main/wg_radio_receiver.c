@@ -68,11 +68,19 @@ void wg_radio_receiver_health(cJSON *object) {
   unsigned queued = uxQueueMessagesWaiting(frames);
   xSemaphoreGive(driver_lock);
   if (!enabled) return;
+  const char *reason = status.last_bad_reason == 1 ? "crc" : status.last_bad_reason == 2 ? "repeater" : "transmitter-id";
   ESP_LOGI("davis_radio", "RX: ISS=%d listen=%d state=%s packets=%llu missed=%llu crc=%llu fifo=%llu spi=%llu resync=%llu queue=%u dropped=%llu pollMax=%llu ms",
     status.transmitter_id, status.channel + 1, !status.ready ? "unavailable" : status.locked ? "tracking" : "scanning",
     (unsigned long long)status.packets, (unsigned long long)status.missed_packets, (unsigned long long)status.crc_errors,
     (unsigned long long)status.fifo_overruns, (unsigned long long)status.spi_errors, (unsigned long long)status.resyncs,
     queued, (unsigned long long)dropped, (unsigned long long)((status.max_poll_gap_us + 999) / 1000));
+  ESP_LOGI("davis_radio", "RF: trigger=%d dBm background=%d dBm sampled=%d signalTimeouts=%llu pllTimeouts=%llu foreign=%llu repeater=%llu AFC=%d Hz",
+    status.rssi_threshold_dbm, status.background_rssi_dbm, status.background_sampled,
+    (unsigned long long)status.receiver_timeouts, (unsigned long long)status.pll_timeouts,
+    (unsigned long long)status.foreign_packets, (unsigned long long)status.repeater_packets, status.last_afc_hz);
+  if (status.last_bad_ms) ESP_LOGI("davis_radio", "Rejected: reason=%s channel=%d RSSI=%d dBm AFC=%d Hz age=%lld ms packet=%s",
+    reason, status.last_bad_channel + 1, status.last_bad_rssi_dbm, status.last_bad_afc_hz,
+    (long long)(esp_timer_get_time()/1000 - status.last_bad_ms), status.last_bad_packet_hex);
   cJSON *o = cJSON_AddObjectToObject(object, "radio");
   cJSON_AddStringToObject(o, "state", !status.ready ? "unavailable" : status.locked ? "tracking" : "scanning");
   cJSON_AddNumberToObject(o, "transmitterId", status.transmitter_id);
@@ -91,6 +99,20 @@ void wg_radio_receiver_health(cJSON *object) {
   cJSON_AddNumberToObject(o, "spiErrors", status.spi_errors);
   cJSON_AddNumberToObject(o, "stalePackets", status.stale_packets);
   cJSON_AddNumberToObject(o, "maxPollGapMs", (status.max_poll_gap_us + 999) / 1000);
+  cJSON_AddNumberToObject(o, "rssiThresholdDbm", status.rssi_threshold_dbm);
+  if (status.background_sampled) cJSON_AddNumberToObject(o, "backgroundRssiDbm", status.background_rssi_dbm);
+  cJSON_AddNumberToObject(o, "afcHz", status.last_afc_hz);
+  cJSON_AddNumberToObject(o, "signalTimeouts", status.receiver_timeouts);
+  cJSON_AddNumberToObject(o, "pllTimeouts", status.pll_timeouts);
+  if (status.last_bad_ms) {
+    cJSON *bad = cJSON_AddObjectToObject(o, "lastRejected");
+    cJSON_AddStringToObject(bad, "reason", reason);
+    cJSON_AddStringToObject(bad, "packetHex", status.last_bad_packet_hex);
+    cJSON_AddNumberToObject(bad, "channel", status.last_bad_channel + 1);
+    cJSON_AddNumberToObject(bad, "rssiDbm", status.last_bad_rssi_dbm);
+    cJSON_AddNumberToObject(bad, "afcHz", status.last_bad_afc_hz);
+    cJSON_AddNumberToObject(bad, "ageMs", esp_timer_get_time()/1000 - status.last_bad_ms);
+  }
   cJSON_AddNumberToObject(o, "queuedPackets", queued);
   cJSON_AddNumberToObject(o, "queueDropped", dropped);
   if (status.last_packet_ms) cJSON_AddNumberToObject(o, "lastPacketAgeMs", esp_timer_get_time() / 1000 - status.last_packet_ms);

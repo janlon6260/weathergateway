@@ -100,7 +100,8 @@ static bool parse_config(const char *json, config_t *out) {
   const char *interface = text(o, "interface");
   out->radio = interface && !strcmp(interface, "davis-iss-rfm69");
   out->wired_rs485=interface&&!strcmp(interface,"davis-iss-rs485");
-  if (cJSON_GetArraySize(o) != (out->radio ? 13 : out->wired_rs485?9:7)) { cJSON_Delete(o); return false; }
+  cJSON *rf_threshold = cJSON_GetObjectItemCaseSensitive(o, "radioRssiThresholdDbm");
+  if (cJSON_GetArraySize(o) != (out->radio ? 13 + (rf_threshold != NULL) : out->wired_rs485?9:7)) { cJSON_Delete(o); return false; }
   const char *station = text(o, "stationId"), *host = text(o, "mqttHost"), *baud = text(o, "uartBaud");
   bool valid = station && !strcmp(station, WG_STATION_ID) && copy_text(out->host, sizeof(out->host), host) &&
     integer(o, "mqttPort", 1, 65535, &out->port) && integer(o, "sampleSeconds", 1, 300, &out->seconds);
@@ -110,6 +111,8 @@ static bool parse_config(const char *json, config_t *out) {
       integer(o, "spiSck", 0, 33, &out->rf.sck) && integer(o, "spiMiso", 0, 33, &out->rf.miso) &&
       integer(o, "spiMosi", 0, 33, &out->rf.mosi) && integer(o, "radioCs", 0, 33, &out->rf.cs) &&
       integer(o, "radioReset", 0, 33, &out->rf.reset) && integer(o, "radioDio0", 0, 33, &out->rf.dio0);
+    out->rf.rssi_threshold_dbm = -85;
+    if (valid && rf_threshold) valid = integer(o, "radioRssiThresholdDbm", -120, -40, &out->rf.rssi_threshold_dbm);
     int values[] = {out->rf.sck, out->rf.miso, out->rf.mosi, out->rf.cs, out->rf.reset, out->rf.dio0};
     for (int i = 0; valid && i < 6; i++) {
       if (!radio_pin(values[i])) valid = false;
@@ -295,7 +298,7 @@ static void emit_record(const wg_spool_record_t *record) {
     struct timeval tv; gettimeofday(&tv,NULL);
     epoch_ms = (int64_t)tv.tv_sec*1000+tv.tv_usec/1000-(esp_timer_get_time()-record->monotonic_us)/1000LL; mapped = true;
   } else if (!epoch_ms) undated = true;
-  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.4.2"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.4.3"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
   if (record->release_id[0]) cJSON_AddStringToObject(o,"firmwareReleaseId",record->release_id);
   if (wg_credentials_id()[0]) cJSON_AddStringToObject(o,"certificateId",wg_credentials_id());
   if (undated) { cJSON_AddNumberToObject(o,"monotonicUs",record->monotonic_us); cJSON_AddStringToObject(o,"reason","clock-unavailable-before-reboot"); }
@@ -382,7 +385,7 @@ void app_main(void) {
   uint8_t random[16]; esp_fill_random(random, sizeof(random)); random[6] = (random[6] & 15) | 64; random[8] = (random[8] & 63) | 128;
   snprintf(boot_id, sizeof(boot_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", random[0],random[1],random[2],random[3],random[4],random[5],random[6],random[7],random[8],random[9],random[10],random[11],random[12],random[13],random[14],random[15]);
   wg_logs_init(boot_id);
-  ESP_LOGI(TAG, "WeatherGateway 2.4.2 started; station %s", WG_STATION_ID);
+  ESP_LOGI(TAG, "WeatherGateway 2.4.3 started; station %s", WG_STATION_ID);
   snprintf(command_topic, sizeof(command_topic), "wg/v1/%s/stations/%s/commands", WG_ENVIRONMENT, WG_STATION_ID); snprintf(telemetry_topic, sizeof(telemetry_topic), "wg/v1/%s/stations/%s/telemetry", WG_ENVIRONMENT, WG_STATION_ID); snprintf(ack_topic, sizeof(ack_topic), "wg/v1/%s/stations/%s/acks", WG_ENVIRONMENT, WG_STATION_ID); snprintf(status_topic, sizeof(status_topic), "wg/v1/%s/stations/%s/status", WG_ENVIRONMENT, WG_STATION_ID);
   snprintf(firmware_topic,sizeof(firmware_topic),"wg/v1/%s/stations/%s/firmware-data",WG_ENVIRONMENT,WG_STATION_ID);
   snprintf(receipt_topic,sizeof(receipt_topic),"wg/v1/%s/stations/%s/telemetry-receipt",WG_ENVIRONMENT,WG_STATION_ID);

@@ -76,6 +76,19 @@ test('radio diagnostics persist with separate ISS and Wi-Fi signals and reject i
     queuedPackets: 0,
     queueDropped: 0,
     lastPacketAgeMs: 180,
+    rssiThresholdDbm: -85,
+    backgroundRssiDbm: -103,
+    afcHz: -244,
+    signalTimeouts: 4,
+    pllTimeouts: 0,
+    lastRejected: {
+      reason: 'crc',
+      packetHex: '8004700f99009110ffff',
+      channel: 2,
+      rssiDbm: -100,
+      afcHz: 1245,
+      ageMs: 700,
+    },
   };
   recordDeviceHealth(s.store, station.id, { online: true, wifiRssiDbm: -45, mqttInputDropped: 0, radio });
   const health = JSON.parse(
@@ -84,7 +97,14 @@ test('radio diagnostics persist with separate ISS and Wi-Fi signals and reject i
   assert.deepEqual(health.radio, radio);
   assert.equal(health.wifiRssiDbm, -45);
   assert.equal(health.mqttInputDropped, 0);
-  for (const invalid of [{ channel: 6 }, { transmitterId: 0 }, { crcErrors: -1 }, { state: 'ready' }])
+  for (const invalid of [
+    { channel: 6 },
+    { transmitterId: 0 },
+    { crcErrors: -1 },
+    { state: 'ready' },
+    { rssiThresholdDbm: -121 },
+    { lastRejected: { ...radio.lastRejected, packetHex: 'invalid' } },
+  ])
     assert.equal(
       deviceHealthSchema.safeParse({ online: true, radio: { ...radio, ...invalid } }).success,
       false,
