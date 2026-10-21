@@ -3,6 +3,7 @@
 // Root mode retains ownership for the earlier Compose layout during upgrades.
 import { mkdirSync, chmodSync, chownSync, lstatSync, existsSync } from 'node:fs';
 import { resolve, join, parse } from 'node:path';
+import { prepareBuilder } from './prepare-builder.js';
 
 const environment = process.env.WG_ENVIRONMENT;
 if (!['production', 'development', 'test'].includes(environment)) throw Error('Ugyldig miljø');
@@ -26,6 +27,7 @@ for (const [path, uid, mode] of [
   [join(data, 'system'), targetUid, 0o750],
   [join(data, 'system/firmware-builds'), targetUid, 0o700],
   [join(data, 'system/firmware-build-cache'), targetUid, 0o700],
+  [join(data, 'system/firmware-builder-runtime'), targetUid, 0o750],
   [join(data, 'system/mqtt'), targetUid, 0o750],
   [join(data, 'system/mqtt/data'), rootMode ? 1883 : targetUid, 0o750],
   [join(data, 'public'), targetUid, 0o750],
@@ -46,6 +48,7 @@ for (const [path, uid, mode] of [
   }
   chmodSync(path, mode);
 }
+prepareBuilder(data);
 console.log(
   JSON.stringify({
     event: 'runtime_directories_prepared',

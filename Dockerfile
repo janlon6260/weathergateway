@@ -1,9 +1,9 @@
 ARG NODE_IMAGE=node:24.22.0-bookworm-slim
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends openssl python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY web ./web
 COPY shared ./shared
 RUN npm run build
@@ -18,6 +18,9 @@ COPY --from=build --chown=70001:70007 /app/web/dist ./web/dist
 COPY --chown=70001:70007 server ./server
 COPY --chown=70001:70007 shared ./shared
 COPY --chown=70001:70007 scripts ./scripts
+COPY --chown=70001:70007 builder/worker.py ./builder/worker.py
+COPY --chown=70001:70007 builder/vendor ./builder/vendor
+COPY --chown=70001:70007 firmware ./firmware
 COPY --chown=70001:70007 deploy/broker-entrypoint.sh ./deploy/broker-entrypoint.sh
 COPY --chown=70001:70007 package.json package-lock.json ./
 USER 70001:70007

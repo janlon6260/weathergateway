@@ -57,6 +57,27 @@ export function configuration(env = process.env) {
   return {
     environment,
     role,
+    configurationDatabase: env.WG_CONFIG_DB_HOST
+      ? {
+          host: env.WG_CONFIG_DB_HOST,
+          port: Number(env.WG_CONFIG_DB_PORT || 3306),
+          user: env.WG_CONFIG_DB_USER || 'weathergateway',
+          password: secret('WG_CONFIG_DB_PASSWORD', env),
+          database:
+            env.WG_CONFIG_DB_DATABASE ||
+            (environment === 'production' ? 'weathergateway' : `weathergateway_${environment}`),
+          ...(env.WG_CONFIG_DB_TLS === 'true'
+            ? {
+                ssl: {
+                  rejectUnauthorized: true,
+                  verifyIdentity: true,
+                  minVersion: 'TLSv1.2',
+                  ...(env.WG_CONFIG_DB_CA_FILE ? { ca: readFileSync(env.WG_CONFIG_DB_CA_FILE, 'utf8') } : {}),
+                },
+              }
+            : {}),
+        }
+      : undefined,
     bind,
     port: Number(env.PORT || 8080),
     root,
@@ -134,6 +155,7 @@ const seeds = [
   ],
 ];
 export function initialize(store, defaults) {
+  store.initialize('notifications', {});
   store.initialize('gateway', defaults);
   // Before the first development login, .env remains the source for the AD
   // bootstrap. Once used or edited through the change flow, settings are owned

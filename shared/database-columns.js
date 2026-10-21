@@ -11,6 +11,7 @@ export const databaseColumns = {
   windGustMaxMs: 'max_gust_current_day',
 };
 export const extendedDatabaseColumns = {
+  uvIndex: 'davis_vp_uv',
   rainMonthMm: 'monthly_rainfall',
   rainYearMm: 'yearly_rainfall',
   rainYesterdayMm: 'yesterday_rainfall',

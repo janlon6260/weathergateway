@@ -118,7 +118,7 @@ test('server build retains encrypted identity, signs USB and OTA, keeps password
   const identity = s.builds.identity(s.stationId),
     staged = join(s.builds.root, build.id, 'request.json');
   assert.ok(existsSync(staged));
-  assert.equal(readFileSync(s.builds.vaultPath(s.stationId), 'utf8').includes(input.wifiPassword), false);
+  assert.equal(s.store.db.prepare('SELECT payload FROM settings_secrets WHERE name=?').get(`firmware:${s.stationId}`).payload.includes(input.wifiPassword),false);
   const header = JSON.parse(readFileSync(staged, 'utf8')).files['provisioning.h'];
   assert.ok(header.includes(JSON.stringify(input.wifiPassword)));
   assert.equal(result(s, build).state, 'ready');

@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { setup } from './helpers.js';
+import { localMariaDB } from './local-mariadb.js';
 
 test('non-root preparation uses UID 70001/GID 70007 and never attempts privileged ownership changes', (t) => {
   const { store } = setup(t),
@@ -16,7 +17,7 @@ test('non-root preparation uses UID 70001/GID 70007 and never attempts privilege
     import fs from 'node:fs';
     import {syncBuiltinESMExports} from 'node:module';
     const stat = fs.lstatSync;
-    fs.lstatSync = (...args) => { const value = stat(...args); value.uid = 70001; value.gid = 70007; return value; };
+    fs.lstatSync = (...args) => { const value = stat(...args); if(value){value.uid = 70001; value.gid = 70007;} return value; };
     fs.chownSync = () => { throw Error('Privileged ownership change attempted'); };
     syncBuiltinESMExports();
     Object.defineProperty(process,'platform',{value:'linux'});
@@ -43,7 +44,7 @@ test('non-root preparation uses UID 70001/GID 70007 and never attempts privilege
 
 test(
   'actual control process starts from empty certificate and data directories, without an AD CA or password file',
-  { timeout: 15000 },
+  { timeout: 45000, skip: !process.env.WG_MARIADB_BIN },
   async (t) => {
     const { store } = setup(t),
       data = join(store.root, 'empty-data'),
@@ -53,11 +54,13 @@ test(
     const port = probe.address().port;
     await new Promise((resolve) => probe.close(resolve));
     const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('WG_')));
+    const sql = await localMariaDB(t);
     const processUnderTest = spawn(process.execPath, ['server/index.js'], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...env,
+        ...sql,
         WG_ENVIRONMENT: 'development',
         WG_ROLE: 'control',
         WG_DATA_ROOT: data,

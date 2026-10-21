@@ -6,3 +6,5 @@ Dockerfile text eol=lf
 *.jsx text eol=lf
 *.c text eol=lf
 *.h text eol=lf
+# Vendored sources are checked against byte-for-byte SHA-256 digests.
+builder/vendor/** -text

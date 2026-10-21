@@ -2,12 +2,12 @@
 
 Lokale tester kjøres i prosjektet, ikke i DockerHub-workflowen. DockerHub bygger og publiserer bare `janlon6260/weathergateway` med miljø `prod` og secret `DOCKERHUB_TOKEN`.
 
-## Verifisert 20. oktober 2026
+## Verifisert 21. oktober 2026
 
 | Kontroll                                     | Resultat                                                                                                            |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Full backendkjøring med native integrasjoner | **132 bestått, 0 feil, 0 hoppet over**                                                                              |
-| MariaDB 11.4.13                              | Fire faktiske skjemakopier, NULL-migrasjon, alle felt, Vatne og duplikatvern bestått                                |
+| Full backendkjøring med native integrasjoner | **161 bestått, 0 feil, 0 hoppet over**                                                                              |
+| MariaDB 11.4.13                              | Fire uendrede WD-skjemaer, alle felt, Vatne, pausevalg, sentrale innstillinger og SQL-restore bestått                                |
 | Mosquitto 2.1.2                              | mTLS, IP-SAN, ACL og varig lagringskvittering bestått                                                               |
 | React                                        | Produksjonsbygg og Edge desktop/mobil bestått, inkludert nye arbeidsflyter og DB-utkast                             |
 | Sertifikatpanel                              | Tom oppstart, CA/MQTT/HTTPS/DB, 50 års gyldighet, mTLS, roller/CSRF, nøkkelbevaring og rollback etter omstart bestått |
@@ -17,7 +17,7 @@ Lokale tester kjøres i prosjektet, ikke i DockerHub-workflowen. DockerHub bygge
 | ESP-IDF 6.0.2                                | App 1 049 280 byte; 33 % ledig i hver 1,5 MB OTA-slot                                                               |
 | Sikkerhetsprofil                             | ESP-IDF-konfigurasjon og produksjonspartisjonstabell validert; ingen sikkerhetsfirmware flashet eller eFuses endret |
 
-Den siste backendrapporten ligger lokalt i git-ignorert `artifacts/backend-verification.txt`. Testidentiteter og verktøy under `.tools`/`artifacts` inngår ikke i Docker-imaget. Disse resultatene gjelder lokale kontroller, ikke produksjonsgodkjenning av målutstyret.
+Den siste backendrapporten ligger lokalt i git-ignorert `artifacts/test-results-20261021.txt`. Testidentiteter og verktøy under `.tools`/`artifacts` inngår ikke i Docker-imaget. Disse resultatene gjelder lokale kontroller, ikke produksjonsgodkjenning av målutstyret.
 
 ## Reproduser lokale kontroller
 
@@ -51,4 +51,6 @@ React er prøvd med Edge på desktop og 390-pikslers mobilvisning. Testadapteren
 
 Registrer faktisk utførelse/resultat i **Produksjonsstatus**. Manuelle oppføringer er knyttet til bekreftet konfigurasjon, aktør og tidspunkt og utløper etter 30 dager eller endret konfigurasjon. En manuell oppføring kan ikke overstyre manglende sensordata, SQL-levering, enhetsrapportert sikkerhet eller arbeiderpuls.
 
-SQL-migrasjonen er [deploy/sql/20261020-nullable-weather-measurements.sql](../deploy/sql/20261020-nullable-weather-measurements.sql). Produksjonstabeller og eFuses er ikke endret fra denne utviklingsøkten. Ingen tilgjengelig SSH-/Docker-host eller fysisk ESP32 finnes nå; akseptanse på målutstyret gjenstår.
+Den tidligere NULL-migrasjonen skal ikke kjøres ved denne oppgraderingen; opprinnelige Weather Display-skjemaer beholdes. Se [oppgraderingen](operations-20261021.md). Produksjonstabeller og eFuses er ikke endret fra denne utviklingsøkten. Ingen tilgjengelig SSH-/Docker-host eller fysisk ESP32 finnes nå; akseptanse på målutstyret gjenstår.
+
+Firmware 2.3.0 er også kompilert med ESP-IDF 6.1 gjennom serverbyggingen. Signatur og alle fire USB-segmenter er verifisert; appen er 1 084 416 byte. Nye SMTP-/varselskjemaer, beholdte værverdier, feltalder og verktøyfaner er prøvd i Edge på desktop og mobil. Fysisk USB-kvittering og Docker-drift er fortsatt ikke tilgjengelig for verifisering her.

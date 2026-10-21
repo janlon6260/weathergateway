@@ -72,12 +72,18 @@ export const gatewaySchema = z
     retentionDays: z.number().int().min(7).max(3650).default(365),
     backupIntervalHours: z.number().int().min(0).max(168).default(24),
     backupKeepCount: z.number().int().min(2).max(365).default(30),
+    dataWarningSeconds: z.number().min(0.1).max(86400).default(3),
+    dataDownSeconds: z.number().min(1).max(172800).default(30),
+    databaseLoggingEnabled: z.boolean().default(true),
     warningSeconds: z.number().int().min(10).max(86400).default(180),
     downSeconds: z.number().int().min(20).max(172800).default(300),
     directory: directorySchema,
   })
   .strict()
-  .refine((v) => v.downSeconds > v.warningSeconds, 'Nedetidsgrense må være større enn varslingsgrense');
+  .refine(
+    (v) => v.downSeconds > v.warningSeconds && v.dataDownSeconds > v.dataWarningSeconds,
+    'Nedetidsgrense må være større enn varslingsgrense',
+  );
 export const meteorologySchema = z
   .object({
     windWindowSeconds: z.number().int().min(60).max(3600),
@@ -100,6 +106,12 @@ export const stationSchema = z
     name: z.string().trim().min(1).max(100),
     model: z.enum(['Davis Vantage Vue', 'Davis Vantage Pro2', 'Netatmo']),
     enabled: z.boolean(),
+    freshness: z
+      .object({ warningSeconds: z.number().min(0.1).max(86400), downSeconds: z.number().min(1).max(172800) })
+      .strict()
+      .refine((v) => v.downSeconds > v.warningSeconds)
+      .nullable()
+      .default(null),
     latitude: z.number().min(-90).max(90),
     longitude: z.number().min(-180).max(180),
     elevationM: z.number().min(-500).max(9000),
@@ -159,6 +171,7 @@ export const databaseSchema = z
   .object({
     stationId: id,
     enabled: z.boolean().default(false),
+    loggingEnabled: z.boolean().default(true),
     host: z.union([host, z.literal('')]).default(''),
     port: z.number().int().min(1).max(65535).default(3306),
     transport: z.preprocess(
@@ -175,6 +188,7 @@ export const databaseSchema = z
       .string()
       .regex(/^WG_DB_PASSWORD(?:_[A-Z0-9_]{1,48})?$/)
       .default('WG_DB_PASSWORD'),
+    passwordSecret: z.string().regex(/^weather-db:[0-9a-f-]{36}$/).nullable().default(null),
     stationKey: z.string().min(1).max(100),
     stationNameColumn: columnName.nullable().default(null),
     intervalSeconds: z.number().int().min(1).max(86400).default(60),
@@ -394,9 +408,75 @@ export const alarmsSchema = z
   .object({ stationId: id, rules: z.array(alarmRuleSchema).max(50) })
   .strict()
   .refine((v) => new Set(v.rules.map((r) => r.id)).size === v.rules.length, 'Alarm-ID må være unik');
+const email = z.string().email().max(254);
+export const notificationRuleSchema = z
+  .object({
+    id,
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .refine((v) => !/[\r\n]/.test(v)),
+    enabled: z.boolean().default(true),
+    kind: z.enum([
+      'station_offline',
+      'esp_offline',
+      'data_age',
+      'sensor_contact_lost',
+      'heap_low',
+      'spool_dropped',
+    ]),
+    stationIds: z.array(id).max(100).default([]),
+    thresholdSeconds: z.number().int().min(0).max(604800).default(30),
+    minimumHeapBytes: z.number().int().min(1024).max(1000000).default(32768),
+    repeatSeconds: z.number().int().min(0).max(604800).default(900),
+    sendRecovery: z.boolean().default(true),
+    recipients: z.array(email).max(50).default([]),
+  })
+  .strict();
+export const notificationsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    recipients: z.array(email).max(50).default([]),
+    smtp: z
+      .object({
+        host: z.union([host, z.literal('')]).default(''),
+        port: z.number().int().min(1).max(65535).default(587),
+        security: z.enum(['none', 'starttls', 'tls']).default('starttls'),
+        authEnabled: z.boolean().default(false),
+        user: z.string().max(254).default(''),
+        passwordSecret: z
+          .string()
+          .regex(/^smtp:[0-9a-f-]{36}$/)
+          .nullable()
+          .default(null),
+        from: z.union([email, z.literal('')]).default(''),
+        caCertificate: z.string().max(32000).default(''),
+      })
+      .strict()
+      .default({
+        host: '',
+        port: 587,
+        security: 'starttls',
+        authEnabled: false,
+        user: '',
+        passwordSecret: null,
+        from: '',
+        caCertificate: '',
+      }),
+    rules: z.array(notificationRuleSchema).max(100).default([]),
+  })
+  .strict()
+  .refine(
+    (v) => !v.enabled || (!!v.smtp.host && !!v.smtp.from && (!v.smtp.authEnabled || !!v.smtp.user)),
+    'Fyll inn SMTP-vert, avsender og eventuelt brukernavn',
+  )
+  .refine((v) => new Set(v.rules.map((r) => r.id)).size === v.rules.length, 'Varsel-ID må være unik');
 
 export function validateScope(scope, payload) {
   if (scope === 'gateway') return gatewaySchema.parse(payload);
+  if (scope === 'notifications') return notificationsSchema.parse(payload);
   const invalid = (message) => {
     throw new z.ZodError([{ code: 'custom', path: ['scope'], message }]);
   };

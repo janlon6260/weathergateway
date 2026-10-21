@@ -10,18 +10,25 @@ import { WeatherDatabase } from './weather-database.js';
 import { CertificateManager } from './certificates.js';
 import { prepareRuntime } from './runtime-files.js';
 import { FirmwareBuilds } from './firmware-builds.js';
+import { Notifications } from './notifications.js';
 
 process.umask(0o027);
-const config = configuration(),
-  store = new Store({
-    root: config.root,
-    environment: config.environment,
-    readonly: config.role === 'public',
-  });
+const config = configuration();
+if (config.role !== 'public' && !config.configurationDatabase)
+  throw new Error(
+    'Sett WG_CONFIG_DB_HOST, WG_CONFIG_DB_USER og WG_CONFIG_DB_PASSWORD. Innstillinger krever den separate MariaDB-databasen weathergateway.',
+  );
+const store = new Store({
+  root: config.root,
+  environment: config.environment,
+  readonly: config.role === 'public',
+  configurationDatabase: config.role === 'public' ? undefined : config.configurationDatabase,
+});
 if (config.role !== 'public') initialize(store, config.defaults);
 if (config.role === 'control') prepareRuntime(store);
 const certificateManager = config.role === 'control' ? new CertificateManager({ store, config }) : null;
 const databaseWriter = config.role === 'public' ? null : new WeatherDatabase(store, config);
+const notifications = config.role === 'control' ? new Notifications(store, config) : null;
 const certificates =
   config.role === 'control'
     ? new CertificateIssuer({
@@ -55,6 +62,7 @@ else {
           certificates,
           certificateManager,
           firmwareBuilds,
+          notifications,
         });
   server = createServer(service.app);
   server.requestTimeout = 15000;
@@ -79,6 +87,11 @@ if (config.role === 'control') {
       store.sweep();
       certificateManager.sweep();
       firmwareBuilds.poll();
+      void notifications
+        .tick()
+        .catch((e) =>
+          console.error(JSON.stringify({ event: 'notifications_failed', code: e.code || e.name })),
+        );
       syncAcl(store);
       if (++backupCheck % 60 === 0) scheduleBackup(store);
       if (!renewalTask && certificateManager.pending()?.type !== 'ca')
@@ -103,6 +116,7 @@ async function shutdown() {
   stopping = true;
   clearInterval(timer);
   await renewalTask;
+  await notifications?.running;
   stopSockets();
   await stopWorker();
   await databaseWriter?.close();

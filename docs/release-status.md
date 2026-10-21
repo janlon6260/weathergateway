@@ -1,4 +1,4 @@
-# Leveransestatus – 20. oktober 2026
+# Leveransestatus – 21. oktober 2026
 
 React, Node/Express, Docker-oppsett og ESP-IDF-firmware er implementert i dette prosjektet. Denne leveransen er lokalt verifisert; den er **ikke produksjonsgodkjent på deres utstyr**. Ingen Docker-host eller fysisk ESP32 er tilgjengelig i denne økten. Det er ikke utført flashing, eFuse-endring, produksjons-DDL eller produksjonsskriving.
 
@@ -16,18 +16,18 @@ React, Node/Express, Docker-oppsett og ESP-IDF-firmware er implementert i dette 
 - Signert OTA over eksisterende MQTT, ECDSA P-256-manifest, SHA-256, stasjons-/miljøbinding, sekvenskontroll, eksplisitt bekreftelse og tilbakeføring.
 - Firmwarebygg fra adminpanelet med gatewayadresse, MQTT-port og Wi-Fi før kompilering. Separat ESP-IDF 6.1-builder uten nettverk, signering i control, kryptert enhetslager og direkte USB-pakke til nettleseren eller OTA-test over MQTT. Alle tjenester bruker UID 70001/GID 70007.
 - Varig, avgrenset ESP32-sendekø i slitasjeutjevnet flash. Bare gatewayens kvittering etter varig lagring frigjør køplass. Ukjent måletid arkiveres uten oppdiktet UTC.
-- Konsistente SQLite-backuper med kontrollsum, automatisk plan/retensjon, offline restore og separat offentlig datakopi. Nøkler og hostfiler trenger også beskyttet hostbackup.
+- Sikkerhetskopier med SQL-innstillinger og lokal værhistorikk, kontrollsum, automatisk plan/retensjon, offline restore og separat offentlig datakopi. Nøkler og hostfiler trenger også beskyttet hostbackup.
 - Produksjonsstatus i panelet: faktisk sensor-/SQL-/kø-/sikkerhetsstatus samt konfigurasjonsbundne manuelle akseptanseprøver. Den blir ikke godkjent av enhetstester alene.
 
 ## Lokal verifikasjon
 
-**147 tester bestått, ingen feil eller hoppet over.** Inkluderer serverbygg, enhetsnøkler, passordmaskering, kansellering av kompilatorens underprosesser og vertsbaserte firmwareprøver. Den tidligere kontrollen av produksjonsavhengigheter rapporterte 0 kjente sårbarheter 20. oktober 2026; avhengighetene er ikke endret i serverbygg-leveransen.
+**161 tester bestått, ingen feil eller hoppet over.** Inkluderer serverbygg, enhetsnøkler, passordmaskering, kansellering av kompilatorens underprosesser og vertsbaserte firmwareprøver. `npm audit --omit=dev` rapporterte 0 kjente sårbarheter 21. oktober 2026 etter SMTP-avhengigheten ble lagt til.
 
-Backendtesten inkluderer en ekte Mosquitto 2.1.2 med mTLS/IP-SAN/ACL og en egen MariaDB 11.4.13 med kopier av alle fire faktiske tabellskjemaer. SQL-migrasjonen er prøvd der, inkludert alle værkolonner, Vatnes ekstra felter og gjentakelse etter usikkert commit-resultat. Ingen produksjonsdata ble endret.
+Backendtesten inkluderer en ekte Mosquitto 2.1.2 med mTLS/IP-SAN/ACL og en egen MariaDB 11.4.13 med kopier av alle fire faktiske tabellskjemaer. De opprinnelige skjemaene beholdes uendret, inkludert NOT NULL-standardverdier, Vatnes ekstra felt og gjentakelse etter usikkert commit-resultat. Sentralt innstillingslager, migrering og offline restore er prøvd mot ekte MariaDB. SMTP uten TLS, med TLS og med påkrevd STARTTLS er prøvd mot isolerte testservere. Ingen produksjonsdata ble endret.
 
 React-produksjonsbygg og Edge-test på desktop/mobil er gjennomført. Nettleserprøven dekker kalibreringsutkast, alarmutkast, signert firmwareutkast, historikkimport og produksjonsstatus. AD er erstattet av en kontrollert adapter bare i testoppsettet; ingen slik innlogging finnes i den deploybare applikasjonen.
 
-Firmware **2.2.0** er kompilert med ESP-IDF **6.1**, MQTT 1.1.0 og cJSON 1.7.19~2 gjennom det faktiske skjemaet i adminpanelet. Appen er 1 082 160 byte og passer i begge 1,5 MB OTA-partisjoner. Nettleseren hentet den servergenererte pakken direkte og verifiserte signatur og alle fire segmenter. Desktop/mobil, gjenbruk av byggcache og tomt passordfelt etter innsending er kontrollert. Testbygget har utviklingsidentiteter og skal ikke flashes som produksjon. Docker-containeren er ikke kjørt lokalt, siden ingen Docker-daemon er tilgjengelig. Den faktiske C-koden for flashkø og separat konfigurasjonslager per OTA-slot er også vertsbasert testet; dette erstatter ikke en fysisk strømbrudd-/tilbakeføringsprøve.
+Firmware **2.3.0** er kompilert med ESP-IDF **6.1**, MQTT 1.1.0 og cJSON 1.7.19~2 gjennom det faktiske skjemaet i adminpanelet. Appen er 1 084 416 byte og passer i begge 1,5 MB OTA-partisjoner. Nettleseren hentet den servergenererte pakken direkte og verifiserte signatur og alle fire segmenter. Desktop/mobil, gjenbruk av byggcache og tomt passordfelt etter innsending er kontrollert. Testbygget har utviklingsidentiteter og skal ikke flashes som produksjon. Docker-containeren er ikke kjørt lokalt, siden ingen Docker-daemon er tilgjengelig. Den faktiske C-koden for flashkø og separat konfigurasjonslager per OTA-slot er også vertsbasert testet; dette erstatter ikke en fysisk strømbrudd-/tilbakeføringsprøve.
 
 Kjøringer og endelig antall tester dokumenteres i [akseptanseveiledningen](production-acceptance.md). DockerHub-workflowen kjører fortsatt bare bygg og publisering, som bestilt.
 
@@ -36,9 +36,8 @@ Kjøringer og endelig antall tester dokumenteres i [akseptanseveiledningen](prod
 1. Start begge stakker på faktisk Docker/Portainer-host. Prøv volumer, rettigheter, nettverk, ressursgrenser, sertifikater og omstart.
 2. Bygg med ekte stasjonsidentiteter. Kontroller fysisk ESP32-revisjon før valg av Secure Boot-profil, nøkkelbackup og irreversible eFuse-tiltak. Sikkerhetsprofilen er klargjort; eFuses er ikke aktivert eller prøvd her.
 3. Prøv radio, kalibrering og sender-ID på alle fire ISS-stasjonene. Sammenlign målinger med Davis/Weather Display. Prøv nettutfall, full kø, strømkutt, sertifikatfornyelse, OTA og feil gateway-IP.
-4. Ta SQL-backup, kjør den [konkrete NULL-migrasjonen](../deploy/sql/20261020-nullable-weather-measurements.sql) med egnet driftskonto og samordne bytte av skriver. Appen utfører ikke produksjons-DDL. Kontroller faktisk INSERT-/UPDATE-tilgang og levering.
-5. Fullfør Apache/DNS/brannmur og kontroller adminisolasjon utenfra over både IPv4 og IPv6. Apache-arbeidet er utsatt etter avtale.
-6. Prøv restore av database, enhetsidentiteter og nøkler isolert. Sammenlign levende filer og Socket.IO med Sunnmørsvær og avtalte WD-rapporter.
+4. Fullfør Apache/DNS/brannmur og kontroller adminisolasjon utenfra over både IPv4 og IPv6. Apache-arbeidet er utsatt etter avtale.
+5. Prøv restore av database, enhetsidentiteter og nøkler isolert. Sammenlign levende filer og Socket.IO med Sunnmørsvær og avtalte WD-rapporter.
 
 ## Avgrensninger som ikke skal skjules
 
@@ -48,3 +47,5 @@ Kjøringer og endelig antall tester dokumenteres i [akseptanseveiledningen](prod
 - Netatmo er utsatt etter brukerens avklaring. ISS-repeatere, WeatherLink IP og USB-host er ikke valgt datavei.
 
 Det som gjenstår på målutstyret kan ikke erstattes av en `.env`-verdi eller omtales som allerede verifisert.
+
+Se [endringene 21. oktober](operations-20261021.md) for sentralt MariaDB-innstillingslager, varsling, USB-kvittering, beholdte måleverdier og publisering uten SDK-bygg.

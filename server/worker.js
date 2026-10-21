@@ -11,6 +11,7 @@ import { firmwareChunk } from './firmware-updates.js';
 import { requestCertificateRenewal } from './pki.js';
 import { checkAlarms } from './alarms.js';
 import { ingestDeviceLog, pruneDeviceLogs } from './device-logs.js';
+import { recordDeviceHealth } from './device-health.js';
 
 export function deviceHealth(store, stationId) {
   const observation = latest(store, stationId);
@@ -399,31 +400,7 @@ export function startWorker(store, config, databaseWriter) {
         if (request.stationId !== id.parse(key)) throw new Error('Feil sertifikatidentitet');
         requestCertificateRenewal(store, key, request.certificateId);
       } else if (topic === `${root}/${key}/status`) {
-        const body = z
-          .object({
-            online: z.boolean(),
-            pending: z.number().int().nonnegative().optional(),
-            capacity: z.number().int().positive().optional(),
-            dropped: z.number().int().nonnegative().optional(),
-            clockSynchronized: z.boolean().optional(),
-            ipAddress: z.ipv4().optional(),
-            wifiRssiDbm: z.number().int().min(-127).max(0).optional(),
-            logStreaming: z.boolean().optional(),
-            security: z
-              .object({
-                chipRevision: z.number().int().nonnegative(),
-                secureBoot: z.boolean(),
-                flashEncryption: z.boolean(),
-                nvsEncryption: z.boolean(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict()
-          .parse(JSON.parse(payload.toString('utf8')));
-        store.db
-          .prepare('INSERT OR REPLACE INTO device_status VALUES (?,?,?)')
-          .run(id.parse(key), store.clock(), JSON.stringify(body));
+        recordDeviceHealth(store, key, JSON.parse(payload.toString('utf8')), { retained: packet.retain });
       } else if (topic === `${root}/${key}/firmware-request`) {
         id.parse(key);
         if (payload.length > 1024) throw new Error('For stor firmwareforespørsel');

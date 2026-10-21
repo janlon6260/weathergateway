@@ -1,6 +1,6 @@
 # Arkitektur
 
-Backend er ESM JavaScript på Node 24/Express 5. Adminpanelet er React med Vite. SQLite i WAL-modus lagrer konfigurasjoner, revisjoner, endringer, sesjoner, kommandoer, råobservasjoner og aggregater. Synkrone transaksjoner gjør overgangene atomiske; langsomme nettverksoperasjoner utføres utenfor transaksjonen. SQLite er et enkeltstående hostoppsett; dette er ikke en HA-klynge.
+Backend er ESM JavaScript på Node 24/Express 5. Adminpanelet er React med Vite. MariaDB `weathergateway` lagrer alle administrasjonsinnstillinger, revisjoner, endringer, sesjoner, kommandoer, byggmetadata og krypterte hemmeligheter. MariaDB-transaksjoner og databaselås beskytter endringer. Lokal SQLite i WAL-modus lagrer råobservasjoner, aggregater, diagnostikk og varig værdatakø. Public får bare en lesbar værdatakopi. Det finnes ingen distribuert transaksjon mellom MariaDB og SQLite. Se [driftsendringene](operations-20261021.md).
 
 Hvert miljø har fire containere:
 

@@ -21,7 +21,7 @@ import { ingest } from '../server/observations.js';
 import { observation } from './helpers.js';
 
 test(
-  'real MariaDB: exact four legacy schemas, nullable migration, full weather mapping and uncertain-commit retry',
+  'real MariaDB: original Weather Display schemas remain unchanged, full weather mapping and uncertain-commit retry',
   { skip: !process.env.WG_MARIADB_BIN, timeout: 90000 },
   async () => {
     mkdirSync('artifacts', { recursive: true });
@@ -147,14 +147,18 @@ test(
           columns: {
             ...databaseColumns,
             ...extendedDatabaseColumns,
+            uvIndex: station.key === 'Hahjem' ? 'davis_vp_uv' : null,
             ...(station.key === 'Vatne' ? vatneDatabaseColumns : {}),
           },
         });
         targets.push({ station, target });
-        await assert.rejects(writer.probe(target), /tillate NULL/);
+        assert.equal((await writer.probe(target)).database, 'ok');
       }
-      // The checked-in production proposal is exercised only against this isolated server.
-      await admin.query(readFileSync('deploy/sql/20261020-nullable-weather-measurements.sql', 'utf8'));
+      const schemasBefore = await Promise.all(
+        databases.map(
+          async (name) => (await admin.query(`SHOW CREATE TABLE \`${name}\`.wx_data`))[0][0]['Create Table'],
+        ),
+      );
       for (const { station, target } of targets) {
         assert.equal((await writer.probe(target)).database, 'ok');
         const current = store.current(`database:${station.id}`),
@@ -183,19 +187,19 @@ test(
         assert.equal(rows.length, 1);
         const row = rows[0];
         assert.equal(row.station_id, station.key);
-        assert.equal(row.barometer, null);
-        assert.equal(row.current_windchill, null);
+        assert.equal(row.barometer, 0);
+        assert.equal(row.current_windchill, 0);
         assert.ok(row.dew_point_temperature > 9 && row.dew_point_temperature < 10);
         assert.equal(row.temperature, 20);
-        assert.equal(row.monthly_rainfall, null);
-        assert.equal(row.yearly_rainfall, null);
+        assert.equal(row.monthly_rainfall, 0);
+        assert.equal(row.yearly_rainfall, 0);
         assert.ok(Math.abs(row.average_windspeed - 14.4) < 0.00001);
         assert.equal(row.max_daily_temperature, 20);
         if (station.key === 'Vatne') {
           assert.equal(row.station_name, station.name);
           assert.equal(row.actual_solar_reading, 321);
-          assert.equal(row.forecast_icon, null);
-          assert.equal(row.soil_temperature, null);
+          assert.equal(row.forecast_icon, 0);
+          assert.equal(row.soil_temperature, 0);
           assert.ok(row.month >= 1 && row.month <= 12);
         }
       }
@@ -203,6 +207,12 @@ test(
         logs.some((e) => e.code === 'ECONNRESET'),
         true,
       );
+      const schemasAfter = await Promise.all(
+        databases.map(
+          async (name) => (await admin.query(`SHOW CREATE TABLE \`${name}\`.wx_data`))[0][0]['Create Table'],
+        ),
+      );
+      assert.deepEqual(schemasAfter, schemasBefore);
     } catch (error) {
       error.message += `\nTemporary MariaDB diagnostic: ${diagnostic}`;
       throw error;

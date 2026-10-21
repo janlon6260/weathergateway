@@ -305,7 +305,68 @@ test('failure to persist the delivery queue rolls back the observation and its a
   assert.equal(state.store.db.prepare('SELECT COUNT(*) AS n FROM rain_state').get().n, 0);
 });
 
-test('schema tests execute only reads and require verified TLS, nullable values and a usable unique key', async (t) => {
+test('global and per-station logging pauses block new rows and delivery, preserve backlog and resume at the configured interval', async (t) => {
+  const state = setup(t),
+    station = state.store.stationList()[0].value;
+  configure(state.store, station.id, { intervalSeconds: 10 });
+  const { writer, fake } = backend(t, state);
+  const apply = (scope, patch) => {
+    const current = state.store.current(scope),
+      change = state.store.propose(scope, { ...current.value, ...patch }, current.revision, 'test');
+    state.store.begin(change.id, 'test');
+    state.store.health(change.id, true, {});
+    state.store.confirm(change.id, 'test');
+  };
+  let sequence = 0;
+  const send = () =>
+    ingest(state.store, station.id, observation(station.id, state.now(), { sequence: ++sequence }));
+  send();
+  assert.equal(databaseStatus(state.store)[0].pending, 1);
+  apply('gateway', { databaseLoggingEnabled: false });
+  await writer.drain();
+  assert.equal(fake.pools.length, 0);
+  state.tick(11000);
+  send();
+  assert.equal(databaseStatus(state.store)[0].pending, 1);
+  apply('gateway', { databaseLoggingEnabled: true });
+  apply(`database:${station.id}`, { loggingEnabled: false });
+  await writer.drain();
+  assert.equal(fake.rows.size, 0);
+  state.tick(11000);
+  send();
+  assert.equal(databaseStatus(state.store)[0].pending, 1);
+  apply(`database:${station.id}`, { loggingEnabled: true });
+  await writer.drain();
+  assert.equal(fake.rows.size, 1);
+  send();
+  state.tick(9000);
+  send();
+  assert.equal(databaseStatus(state.store)[0].pending, 1);
+  state.tick(1000);
+  send();
+  assert.equal(databaseStatus(state.store)[0].pending, 2);
+  await writer.drain();
+  assert.equal(fake.rows.size, 3);
+});
+
+test('admin database passwords are encrypted in the settings database and worker receives only its dedicated decryption key', async (t) => {
+  const state = setup(t);
+  state.config.certificateRoot = state.store.safe('certificates');
+  const station = state.store.stationList()[0].value,
+    { writer, fake } = backend(t, state);
+  const reference = writer.savePassword('private-admin-db-password', 'admin');
+  const target = configure(state.store, station.id, { passwordSecret: reference });
+  assert.ok(!JSON.stringify(state.store.configurations()).includes('private-admin-db-password'));
+  assert.ok(
+    !JSON.stringify(state.store.db.prepare('SELECT * FROM settings_secrets').all()).includes(
+      'private-admin-db-password',
+    ),
+  );
+  await writer.probe(target);
+  assert.equal(fake.pools[0].password, 'private-admin-db-password');
+});
+
+test('schema tests execute only reads, verify TLS and accept the original Weather Display defaults', async (t) => {
   const state = setup(t),
     station = state.store.stationList()[0].value;
   const target = configure(state.store, station.id),
@@ -320,7 +381,8 @@ test('schema tests execute only reads and require verified TLS, nullable values 
   await assert.rejects(writer.probe(target), /unik nøkkel/);
   fake.missingUnique = false;
   fake.columns.find((column) => column.name === 'barometer').nullable = 'NO';
-  await assert.rejects(writer.probe(target), /tillate NULL/);
+  fake.columns.find((column) => column.name === 'barometer').defaultValue = '0';
+  assert.ok((await writer.probe(target)).defaultedColumns.includes('barometer'));
 });
 
 test('development refuses production targets even if allowlisted, and an unlisted target never opens a socket', async (t) => {

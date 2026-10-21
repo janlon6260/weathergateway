@@ -32,6 +32,7 @@
 #include "wg_logs.h"
 #include "wg_mqtt_lifecycle.h"
 #include "wg_config_storage.h"
+#include "wg_usb_health.h"
 #include "provisioning.h"
 
 #if !CONFIG_MQTT_PROTOCOL_5
@@ -73,6 +74,9 @@ static int64_t lease_monotonic, last_publish;
 static portMUX_TYPE configuration_lock = portMUX_INITIALIZER_UNLOCKED;
 static esp_timer_handle_t wifi_retry_timer;
 static unsigned wifi_failures;
+static unsigned wifi_reconnects,mqtt_reconnects,received_packets,heartbeat_sequence;
+static int64_t last_iss_packet;
+static uint32_t boot_count;
 static int64_t last_spool_send, last_device_status;
 
 static const char *text(cJSON *object, const char *key) { cJSON *v = cJSON_GetObjectItemCaseSensitive(object, key); return cJSON_IsString(v) ? v->valuestring : NULL; }
@@ -131,7 +135,7 @@ static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void 
   static command_t incoming;
   static bool accepting;
   switch (event_id) {
-    case MQTT_EVENT_CONNECTED: connected = true; new_connection = true; ESP_LOGI(TAG, "MQTT connected with TLS and device certificate"); esp_mqtt_client_subscribe(event->client, command_topic, 1); esp_mqtt_client_subscribe(event->client, firmware_topic, 1); esp_mqtt_client_subscribe(event->client, receipt_topic, 1); break;
+    case MQTT_EVENT_CONNECTED: mqtt_reconnects++; connected = true; new_connection = true; ESP_LOGI(TAG, "MQTT connected with TLS and device certificate"); esp_mqtt_client_subscribe(event->client, command_topic, 1); esp_mqtt_client_subscribe(event->client, firmware_topic, 1); esp_mqtt_client_subscribe(event->client, receipt_topic, 1); break;
     case MQTT_EVENT_DISCONNECTED: connected = false; ESP_LOGW(TAG, "MQTT disconnected; observations remain in durable storage"); break;
     case MQTT_EVENT_ERROR:
       if (event->error_handle) {
@@ -254,6 +258,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
   (void)arg;
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) esp_wifi_connect();
   else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    wifi_reconnects++;
     wifi_event_sta_disconnected_t *event = data;
     ESP_LOGW(TAG, "Wi-Fi disconnected: reason=%u; reconnecting with backoff", event ? (unsigned)event->reason : 0);
     connected = false; xEventGroupClearBits(network_events, 1); if (wifi_failures < 5) wifi_failures++;
@@ -282,7 +287,7 @@ static void emit_record(const wg_spool_record_t *record) {
     struct timeval tv; gettimeofday(&tv,NULL);
     epoch_ms = (int64_t)tv.tv_sec*1000+tv.tv_usec/1000-(esp_timer_get_time()-record->monotonic_us)/1000LL; mapped = true;
   } else if (!epoch_ms) undated = true;
-  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.2.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.3.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
   if (record->release_id[0]) cJSON_AddStringToObject(o,"firmwareReleaseId",record->release_id);
   if (wg_credentials_id()[0]) cJSON_AddStringToObject(o,"certificateId",wg_credentials_id());
   if (undated) { cJSON_AddNumberToObject(o,"monotonicUs",record->monotonic_us); cJSON_AddStringToObject(o,"reason","clock-unavailable-before-reboot"); }
@@ -329,6 +334,8 @@ void app_main(void) {
   setenv("TZ", "UTC0", 1); tzset();
   if (psa_crypto_init() != PSA_SUCCESS) abort();
   ESP_ERROR_CHECK(nvs_flash_init()); ESP_ERROR_CHECK(nvs_open("gateway", NVS_READWRITE, &nvs));
+  esp_err_t count_status=nvs_get_u32(nvs,"boot_count",&boot_count);if(count_status!=ESP_OK&&count_status!=ESP_ERR_NVS_NOT_FOUND)ESP_ERROR_CHECK(count_status);
+  boot_count++;ESP_ERROR_CHECK(nvs_set_u32(nvs,"boot_count",boot_count));ESP_ERROR_CHECK(nvs_commit(nvs));
   configuration_nvs = nvs;
 #ifdef WG_BUILD_ID
   // Each OTA slot owns its settings. A candidate starts with its compiled defaults;
@@ -364,11 +371,12 @@ void app_main(void) {
   uint8_t random[16]; esp_fill_random(random, sizeof(random)); random[6] = (random[6] & 15) | 64; random[8] = (random[8] & 63) | 128;
   snprintf(boot_id, sizeof(boot_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", random[0],random[1],random[2],random[3],random[4],random[5],random[6],random[7],random[8],random[9],random[10],random[11],random[12],random[13],random[14],random[15]);
   wg_logs_init(boot_id);
-  ESP_LOGI(TAG, "WeatherGateway 2.2.0 started; station %s", WG_STATION_ID);
+  ESP_LOGI(TAG, "WeatherGateway 2.3.0 started; station %s", WG_STATION_ID);
   snprintf(command_topic, sizeof(command_topic), "wg/v1/%s/stations/%s/commands", WG_ENVIRONMENT, WG_STATION_ID); snprintf(telemetry_topic, sizeof(telemetry_topic), "wg/v1/%s/stations/%s/telemetry", WG_ENVIRONMENT, WG_STATION_ID); snprintf(ack_topic, sizeof(ack_topic), "wg/v1/%s/stations/%s/acks", WG_ENVIRONMENT, WG_STATION_ID); snprintf(status_topic, sizeof(status_topic), "wg/v1/%s/stations/%s/status", WG_ENVIRONMENT, WG_STATION_ID);
   snprintf(firmware_topic,sizeof(firmware_topic),"wg/v1/%s/stations/%s/firmware-data",WG_ENVIRONMENT,WG_STATION_ID);
   snprintf(receipt_topic,sizeof(receipt_topic),"wg/v1/%s/stations/%s/telemetry-receipt",WG_ENVIRONMENT,WG_STATION_ID);
   reconnect();
+  wg_usb_health_start(boot_id,configuration_hash);
   esp_ota_img_states_t ota_state; const esp_partition_t *running = esp_ota_get_running_partition(); bool verifying = !wg_ota_busy() && esp_ota_get_state_partition(running, &ota_state) == ESP_OK && ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   int64_t verify_deadline = esp_timer_get_time() + 120000000LL;
   command_t command; uint8_t packet[99];
@@ -384,6 +392,7 @@ void app_main(void) {
     else got_packet = davis_poll(now / 1000, current.seconds, packet);
     bool failed = current.radio ? davis_radio_failed(now / 1000) : davis_failed();
     if (got_packet) {
+      received_packets++;last_iss_packet=now;
       publish(packet, current.radio ? 10 : 99, channel, rssi);
       static int64_t last_packet_log;
       if (now-last_packet_log >= 10000000LL) { ESP_LOGI(TAG, "Sensor packet received: channel=%d, RSSI=%d dBm", channel+1, rssi); last_packet_log=now; }
@@ -395,8 +404,13 @@ void app_main(void) {
     wg_logs_tick(mqtt, connected);
     if (wg_credentials_tick(connected,telemetry_acked,state.pending || wg_ota_busy())) reconnect();
     if (connected && now-last_spool_send >= 3000000LL) { wg_spool_record_t queued; if (wg_spool_peek(&queued)) { emit_record(&queued); last_spool_send = now; } }
-    if (connected && (reconnected || now-last_device_status >= 30000000LL)) {
+    if (connected && (reconnected || now-last_device_status >= 5000000LL)) {
       cJSON *o = cJSON_CreateObject(); cJSON_AddBoolToObject(o,"online",true); cJSON_AddNumberToObject(o,"pending",wg_spool_pending()); cJSON_AddNumberToObject(o,"capacity",wg_spool_capacity()); cJSON_AddNumberToObject(o,"dropped",wg_spool_dropped()); cJSON_AddBoolToObject(o,"clockSynchronized",time(NULL) >= WG_MINIMUM_EPOCH);
+      wg_health_fields(o);cJSON_AddNumberToObject(o,"heartbeatSequence",++heartbeat_sequence);
+      cJSON_AddNumberToObject(o,"bootCount",boot_count);cJSON_AddNumberToObject(o,"cpuFrequencyMhz",CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+      cJSON_AddNumberToObject(o,"wifiReconnects",wifi_reconnects);cJSON_AddNumberToObject(o,"mqttReconnects",mqtt_reconnects);
+      cJSON_AddNumberToObject(o,"packetsReceived",received_packets);cJSON_AddBoolToObject(o,"sensorContact",!failed);
+      if(last_iss_packet)cJSON_AddNumberToObject(o,"lastIssPacketAgeMs",(now-last_iss_packet)/1000);
       esp_chip_info_t chip; esp_chip_info(&chip);
       ESP_LOGI(TAG, "Status: sensor=%s pending=%u dropped=%u heap=%u", failed ? "missing" : "OK", (unsigned)wg_spool_pending(), (unsigned)wg_spool_dropped(), (unsigned)esp_get_free_heap_size());
       esp_netif_ip_info_t network; esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");

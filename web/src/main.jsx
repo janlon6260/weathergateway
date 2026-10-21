@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 import './style.css';
 import { CertificateAdministration } from './certificates.jsx';
 import { DeviceTools } from './device-tools.jsx';
+import { DataFreshness, Measurement, FreshnessFields } from './freshness.jsx';
+import { dataStatus, freshnessThresholds } from '../../shared/freshness.js';
+import { DeviceHealth } from './device-health.jsx';
+import { NotificationSettings } from './notifications.jsx';
 import { meteorologyDefaults, calibrationDefaults } from '../../shared/meteorology-settings.js';
 import { alarmMetrics } from '../../shared/alarm-metrics.js';
 import {
@@ -83,6 +87,7 @@ function App() {
   const offset = useRef(0);
   async function api(path, body, method = body === undefined ? 'GET' : 'POST') {
     const response = await fetch(`/api${path}`, {
+      signal: AbortSignal.timeout(20000),
       method,
       credentials: 'same-origin',
       headers: {
@@ -279,6 +284,11 @@ function App() {
       (!selection.length || selection.includes(s.value.id)),
   );
   const openChanges = data.changes.filter((c) => ['draft', 'testing', 'confirming'].includes(c.state));
+  const currentStatuses = data.stations
+    .filter((s) => s.value.model !== 'Netatmo')
+    .map(({ value: s }) =>
+      dataStatus(live[s.key]?.lastValidTime, now, freshnessThresholds(data.gateway.value, s), s.enabled),
+    );
   const visiblePages = Object.keys(labels)
     .filter(
       (p) =>
@@ -286,6 +296,7 @@ function App() {
     )
     .filter((p) => p !== 'devices' || operator);
   function scopeName(scope) {
+    if (scope === 'notifications') return 'E-postvarsling';
     return scope === 'gateway'
       ? 'Gateway'
       : `${scope.startsWith('device:') ? 'Enhet' : scope.startsWith('database:') ? 'Database' : scope.startsWith('firmware:') ? 'Firmware' : scope.startsWith('alarms:') ? 'Alarmer' : 'Stasjon'} · ${data.stations.find((s) => scope.endsWith(s.value.id))?.value.name || scope}`;
@@ -501,13 +512,13 @@ function App() {
                 />
                 <Stat
                   label="Tilkoblet"
-                  number={Object.values(live).filter((v) => v.status === 'green').length}
+                  number={currentStatuses.filter((status) => status === 'green').length}
                   detail="Ferske og gyldige målinger"
                   tone="green"
                 />
                 <Stat
                   label="Trenger oppfølging"
-                  number={Object.values(live).filter((v) => ['orange', 'red'].includes(v.status)).length}
+                  number={currentStatuses.filter((status) => ['orange', 'red'].includes(status)).length}
                   detail="Forsinkede data eller sensorfeil"
                   tone="amber"
                 />
@@ -521,7 +532,10 @@ function App() {
                 <div className="panel-heading">
                   <div>
                     <h2>Sanntidsdata</h2>
-                    <p className="muted small">Måletid og verdier fra stasjonens siste observasjon.</p>
+                    <p className="muted small">
+                      Siste mottatte verdier beholdes. Grønn: fersk · oransje: forsinket · rød: for gammel.
+                      Standardgrenser: 3 og 30 sekunder.
+                    </p>
                   </div>
                   <input
                     className="search"
@@ -576,22 +590,52 @@ function App() {
                               <small>{s.value.model}</small>
                             </td>
                             <td>
-                              <span
-                                className={`status ${s.value.enabled ? l.status || 'unknown' : 'disabled'}`}
-                              >
-                                <i />
-                                {!s.value.enabled
-                                  ? 'Deaktivert'
-                                  : { green: 'Tilkoblet', orange: 'Forsinket', red: 'Ingen ferske data' }[
-                                      l.status
-                                    ] || 'Venter på data'}
-                              </span>
+                              <DataFreshness
+                                station={s.value}
+                                gateway={data.gateway.value}
+                                data={l}
+                                now={now}
+                              />
                             </td>
-                            <td className="number">{value(l.temp, ' °C')}</td>
-                            <td>{value(l.wlatest, ' m/s')}</td>
-                            <td>{value(l.hum, ' %')}</td>
-                            <td>{value(l.press, ' hPa')}</td>
-                            <td>{value(l.rfall, ' mm')}</td>
+                            <td className="number">
+                              <Measurement
+                                data={l}
+                                metric="temperatureC"
+                                alias="temp"
+                                suffix=" °C"
+                                now={now}
+                              />
+                            </td>
+                            <td>
+                              <Measurement
+                                data={l}
+                                metric="windSpeedMs"
+                                alias="wlatest"
+                                suffix=" m/s"
+                                now={now}
+                              />
+                            </td>
+                            <td>
+                              <Measurement data={l} metric="humidityPct" alias="hum" suffix=" %" now={now} />
+                            </td>
+                            <td>
+                              <Measurement
+                                data={l}
+                                metric="pressureHpa"
+                                alias="press"
+                                suffix=" hPa"
+                                now={now}
+                              />
+                            </td>
+                            <td>
+                              <Measurement
+                                data={l}
+                                metric="rainTodayMm"
+                                alias="rfall"
+                                suffix=" mm"
+                                now={now}
+                              />
+                            </td>
                             <td className="small">{l.lastValidTime ? time(l.lastValidTime) : '–'}</td>
                             {operator && (
                               <td>
@@ -628,10 +672,12 @@ function App() {
                     <section className="panel device" key={device.scope}>
                       <div className="spread">
                         <span className="device-icon">⌁</span>
-                        <span className={`status ${live[station?.key]?.status || 'unknown'}`}>
-                          <i />
-                          {live[station?.key]?.status === 'green' ? 'Tilkoblet' : 'Venter på data'}
-                        </span>
+                        <DataFreshness
+                          station={station}
+                          gateway={data.gateway.value}
+                          data={live[station?.key]}
+                          now={now}
+                        />
                       </div>
                       <h2>{station?.name}</h2>
                       <p className="muted">
@@ -640,56 +686,62 @@ function App() {
                           ? 'RFM69HCW · 868 MHz'
                           : 'Davis seriell'}
                       </p>
-                      <dl>
-                        <dt>Gateway</dt>
-                        <dd>
-                          {device.value.mqttHost}:{device.value.mqttPort}
-                        </dd>
-                        <dt>
-                          {device.value.interface === 'davis-iss-rfm69' ? 'Kontaktmelding' : 'Måleintervall'}
-                        </dt>
-                        <dd>{device.value.sampleSeconds} sekunder</dd>
-                        {device.value.interface === 'davis-iss-rfm69' && (
-                          <>
-                            <dt>ISS sender-ID</dt>
-                            <dd>{device.value.transmitterId}</dd>
-                            <dt>Radiosignal</dt>
-                            <dd>
-                              {typeof device.telemetry?.rssiDbm === 'number'
-                                ? `${device.telemetry.rssiDbm} dBm · kanal ${device.telemetry.channel + 1}`
-                                : 'Ingen mottatt pakke'}
-                            </dd>
-                            <dt>ISS-batteri</dt>
-                            <dd>
-                              {device.telemetry?.iss
-                                ? device.telemetry.iss.batteryLow
-                                  ? 'Lavt batteri meldt'
-                                  : 'Ingen batterivarsel meldt'
-                                : 'Ukjent'}
-                            </dd>
-                          </>
-                        )}
-                        <dt>Konfigurasjon</dt>
-                        <dd>Revisjon {device.revision}</dd>
-                        <dt>ESP32 IP-adresse</dt>
-                        <dd>{device.delivery?.ipAddress || 'Ikke rapportert'}</dd>
-                        <dt>Wi-Fi-signal</dt>
-                        <dd>
-                          {typeof device.delivery?.wifiRssiDbm === 'number'
-                            ? `${device.delivery.wifiRssiDbm} dBm`
-                            : 'Ikke rapportert'}
-                        </dd>
-                        <dt>Identitet</dt>
-                        <dd className="monospace small">{device.value.stationId}</dd>
-                        <dt>Sendekø på ESP32</dt>
-                        <dd>
-                          {device.delivery
-                            ? `${device.delivery.pending ?? '–'} av ${device.delivery.capacity ?? '–'} plasser`
-                            : 'Ingen køstatus mottatt'}
-                        </dd>
-                        <dt>Målinger som ikke fikk plass</dt>
-                        <dd>{device.delivery?.dropped ?? '–'}</dd>
-                      </dl>
+                      <DeviceHealth health={device.delivery} now={now} />
+                      <details className="device-details">
+                        <summary>Enhetsoppsett og ISS-radio</summary>
+                        <dl>
+                          <dt>Gateway</dt>
+                          <dd>
+                            {device.value.mqttHost}:{device.value.mqttPort}
+                          </dd>
+                          <dt>
+                            {device.value.interface === 'davis-iss-rfm69'
+                              ? 'Kontaktmelding'
+                              : 'Måleintervall'}
+                          </dt>
+                          <dd>{device.value.sampleSeconds} sekunder</dd>
+                          {device.value.interface === 'davis-iss-rfm69' && (
+                            <>
+                              <dt>ISS sender-ID</dt>
+                              <dd>{device.value.transmitterId}</dd>
+                              <dt>Radiosignal</dt>
+                              <dd>
+                                {typeof device.telemetry?.rssiDbm === 'number'
+                                  ? `${device.telemetry.rssiDbm} dBm · kanal ${device.telemetry.channel + 1}`
+                                  : 'Ingen mottatt pakke'}
+                              </dd>
+                              <dt>ISS-batteri</dt>
+                              <dd>
+                                {device.telemetry?.iss
+                                  ? device.telemetry.iss.batteryLow
+                                    ? 'Lavt batteri meldt'
+                                    : 'Ingen batterivarsel meldt'
+                                  : 'Ukjent'}
+                              </dd>
+                            </>
+                          )}
+                          <dt>Konfigurasjon</dt>
+                          <dd>Revisjon {device.revision}</dd>
+                          <dt>ESP32 IP-adresse</dt>
+                          <dd>{device.delivery?.ipAddress || 'Ikke rapportert'}</dd>
+                          <dt>Wi-Fi-signal</dt>
+                          <dd>
+                            {typeof device.delivery?.wifiRssiDbm === 'number'
+                              ? `${device.delivery.wifiRssiDbm} dBm`
+                              : 'Ikke rapportert'}
+                          </dd>
+                          <dt>Identitet</dt>
+                          <dd className="monospace small">{device.value.stationId}</dd>
+                          <dt>Sendekø på ESP32</dt>
+                          <dd>
+                            {device.delivery
+                              ? `${device.delivery.pending ?? '–'} av ${device.delivery.capacity ?? '–'} plasser`
+                              : 'Ingen køstatus mottatt'}
+                          </dd>
+                          <dt>Målinger som ikke fikk plass</dt>
+                          <dd>{device.delivery?.dropped ?? '–'}</dd>
+                        </dl>
+                      </details>
                       {device.value.interface === 'davis-iss-rfm69' && (
                         <p className="muted small">
                           Lufttrykk er foreløpig ikke tilkoblet.
@@ -777,6 +829,18 @@ function App() {
                 save={(item) => action(() => saveChange('gateway', item, data.gateway.revision))}
               />
               <Operations api={api} onError={setError} />
+              {admin && data.notifications && (
+                <NotificationSettings
+                  key={`smtp:${data.notifications.settings.revision}`}
+                  data={data.notifications}
+                  stations={data.stations}
+                  api={api}
+                  onSaved={() => {
+                    void refresh().catch((e) => setError(e.message));
+                    setPage('changes');
+                  }}
+                />
+              )}
             </>
           )}
           {page === 'certificates' && admin && (
@@ -785,6 +849,40 @@ function App() {
           {page === 'databases' && admin && (
             <section className="panel settings-form">
               <h2>Skriving til eksisterende stasjonsdatabaser</h2>
+              <p className="notice">
+                Innstillinger lagres i{' '}
+                <strong>{data.configurationStorage?.database || 'weathergateway'}</strong>. Stasjonsdatabasene
+                mottar bare værdata.
+              </p>
+              <div className="actions">
+                <span
+                  className={`status ${data.gateway.value.databaseLoggingEnabled === false ? 'disabled' : 'green'}`}
+                >
+                  <i />
+                  {data.gateway.value.databaseLoggingEnabled === false
+                    ? 'MariaDB-logging er satt på pause globalt'
+                    : 'Global MariaDB-logging er aktiv'}
+                </span>
+                <button
+                  disabled={pending}
+                  onClick={() =>
+                    action(() =>
+                      saveChange(
+                        'gateway',
+                        {
+                          ...data.gateway.value,
+                          databaseLoggingEnabled: data.gateway.value.databaseLoggingEnabled === false,
+                        },
+                        data.gateway.revision,
+                      ),
+                    )
+                  }
+                >
+                  {data.gateway.value.databaseLoggingEnabled === false
+                    ? 'Aktiver global logging'
+                    : 'Sett global logging på pause'}
+                </button>
+              </div>
               <p>
                 Værdata sendes til wx_data etter at tilkoblingen er testet og gjort gjeldende. Køen beholdes
                 ved databaseutfall og omstart.
@@ -827,7 +925,14 @@ function App() {
                             ? `${record.value.host}/${record.value.database}`
                             : 'Ikke konfigurert'}
                         </td>
-                        <td>{record.lastError || (record.confirmedEnabled ? 'Aktivert' : 'Deaktivert')}</td>
+                        <td>
+                          {record.lastError ||
+                            (record.loggingActive
+                              ? 'Logger'
+                              : record.confirmedEnabled
+                                ? 'Logging pauset'
+                                : 'Ikke konfigurert')}
+                        </td>
                         <td>
                           {record.pending}
                           {record.paused > 0 && ` (${record.paused} venter på tidligere mål)`}
@@ -864,14 +969,30 @@ function App() {
             />
           )}
           {page === 'alarms' && (
-            <AlarmManager
-              data={data.alarms}
-              stations={data.stations}
-              operator={operator}
-              pending={pending}
-              configure={(record) => setModal({ type: 'alarms', record })}
-              acknowledge={(eventId) => action(() => api(`/alarms/events/${eventId}/acknowledge`, {}))}
-            />
+            <>
+              <AlarmManager
+                data={data.alarms}
+                stations={data.stations}
+                operator={operator}
+                pending={pending}
+                configure={(record) => setModal({ type: 'alarms', record })}
+                acknowledge={(eventId) => action(() => api(`/alarms/events/${eventId}/acknowledge`, {}))}
+              />
+              {admin && data.notifications && (
+                <NotificationSettings
+                  key={`rules:${data.notifications.settings.revision}`}
+                  mode="rules"
+                  data={data.notifications}
+                  stations={data.stations}
+                  api={api}
+                  onConfigure={() => setPage('settings')}
+                  onSaved={() => {
+                    void refresh().catch((e) => setError(e.message));
+                    setPage('changes');
+                  }}
+                />
+              )}
+            </>
           )}
           {page === 'reports' && (
             <Reports stations={data.stations} api={api} onError={setError} admin={admin} />
@@ -921,6 +1042,7 @@ function App() {
             {modal.type === 'station' && (
               <StationForm
                 record={modal.record}
+                globalSettings={data.gateway.value}
                 pending={pending}
                 save={(item) =>
                   action(async () => {
@@ -1051,6 +1173,7 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
     stationNameColumn: record.value.stationNameColumn ?? '',
   });
   const [columns, setColumns] = useState(JSON.stringify(record.value.columns, null, 2));
+  const [databasePassword, setDatabasePassword] = useState('');
   const [formError, setFormError] = useState('');
   const [testMessage, setTestMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1064,6 +1187,7 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
         ...item,
         stationNameColumn: item.stationNameColumn || null,
         columns: parsed,
+        ...(databasePassword ? { password: databasePassword } : {}),
       });
       if (report?.database)
         setTestMessage(
@@ -1096,7 +1220,29 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
           checked={item.enabled}
           onChange={(event) => set({ ...item, enabled: event.target.checked })}
         />{' '}
-        Aktiver databaseskriving etter bekreftelse
+        Konfigurer og aktiver denne databasetilkoblingen etter bekreftelse
+      </label>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={item.loggingEnabled !== false}
+          onChange={(e) => set({ ...item, loggingEnabled: e.target.checked })}
+        />
+        Logg værdata fra denne stasjonen til MariaDB
+      </label>
+      <label>
+        Databasepassord
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={databasePassword}
+          onChange={(e) => setDatabasePassword(e.target.value)}
+          placeholder={
+            item.passwordSecret
+              ? 'Tomt felt beholder kryptert lagret passord'
+              : 'Kan angis her; lagres kryptert i weathergateway'
+          }
+        />
       </label>
       <div className="form-grid">
         <Field
@@ -1171,8 +1317,9 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
         </p>
       )}
       <p className="muted small">
-        Selve passordet settes i .env. Privat database-CA kan angis med WG_DB_CA_FILE. Databasemålet må være
-        tillatt i WG_DB_ALLOWED_DATABASES for dette miljøet.
+        Passord angitt her lagres kryptert i weathergateway. Eksisterende .env-passord brukes når eget passord
+        ikke er lagret. Privat database-CA kan angis med WG_DB_CA_FILE. Databasemålet må være tillatt i
+        WG_DB_ALLOWED_DATABASES for dette miljøet.
       </p>
       <label>
         Feltkobling til wx_data (JSON; null utelater en måling)
@@ -1191,6 +1338,7 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
               {
                 ...databaseColumns,
                 ...extendedDatabaseColumns,
+                uvIndex: item.stationKey.toLowerCase() === 'hahjem' ? 'davis_vp_uv' : null,
                 ...(item.stationKey.toLowerCase() === 'vatne' ? vatneDatabaseColumns : {}),
               },
               null,
@@ -1199,7 +1347,7 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
           )
         }
       >
-        Bruk alle eksisterende værkolonner
+        Foreslå Weather Display-feltkobling (må testes)
       </button>
       {record.pending > 0 && (
         <p className="notice">
@@ -1220,7 +1368,7 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
     </form>
   );
 }
-function StationForm({ record, pending, save }) {
+function StationForm({ record, pending, save, globalSettings }) {
   const [item, set] = useState({
     ...(record?.value || {
       name: '',
@@ -1270,6 +1418,7 @@ function StationForm({ record, pending, save }) {
           set={set}
         />
       </div>
+      <FreshnessFields item={item} set={set} globalSettings={globalSettings} />
       <h3>Meteorologiske beregninger</h3>
       <div className="form-grid">
         {[
@@ -1482,7 +1631,14 @@ function DeviceForm({ record, pending, save }) {
   );
 }
 function Settings({ record, pending, save }) {
-  const [item, set] = useState({ backupIntervalHours: 24, backupKeepCount: 30, ...record.value }),
+  const [item, set] = useState({
+      backupIntervalHours: 24,
+      backupKeepCount: 30,
+      dataWarningSeconds: 3,
+      dataDownSeconds: 30,
+      databaseLoggingEnabled: true,
+      ...record.value,
+    }),
     [directory, setDirectory] = useState(JSON.stringify(record.value.directory, null, 2)),
     [localError, setLocalError] = useState('');
   return (
@@ -1503,6 +1659,15 @@ function Settings({ record, pending, save }) {
       }}
     >
       <h2>Gateway</h2>
+      <FreshnessFields item={item} set={set} gateway />
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={item.databaseLoggingEnabled}
+          onChange={(e) => set({ ...item, databaseLoggingEnabled: e.target.checked })}
+        />
+        Aktiver logging av værdata til MariaDB globalt
+      </label>
       <div className="form-grid">
         <Field label="Adminpanelets adresse" name="adminOrigin" item={item} set={set} />
         <Field label="Offentlig API-adresse" name="publicOrigin" item={item} set={set} />
@@ -1535,14 +1700,14 @@ function Settings({ record, pending, save }) {
           set={set}
         />
         <Field
-          label="Varsle ved eldre data enn (sekunder)"
+          label="Ekstern kompatibilitetsvisning: oransje etter (sekunder)"
           name="warningSeconds"
           type="number"
           item={item}
           set={set}
         />
         <Field
-          label="Marker utilgjengelig etter (sekunder)"
+          label="Ekstern kompatibilitetsvisning: rød etter (sekunder)"
           name="downSeconds"
           type="number"
           item={item}

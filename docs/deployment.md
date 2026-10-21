@@ -91,7 +91,7 @@ Enhetssertifikater har valgfri gyldighet inntil 50 år (standard 90 dager) og fj
 
 Control lager konsistente databasekopier i `<miljø>/system/backups` med miljø, status, tidspunkt og SHA-256. Standard automatisk intervall er 24 timer, og de 30 siste fullførte kopiene beholdes. Begge innstillinger styres i panelet med test/bekreftelse; intervall 0 deaktiverer planen. Mislykkede forsøk gjentas tidligst etter én time. Databasen inneholder også rårammene. Nøkler, firmwarebilder, JSONL og øvrige filer må inngå i separat, beskyttet hostbackup. Ekstern/offsite backup må settes opp på verten.
 
-Prøv gjenoppretting på en isolert kopi først. Ved reell restore: stopp alle fire tjenester, behold diskbackup og bruk UUID fra backuplisten:
+Prøv gjenoppretting på en isolert kopi først. Ved reell restore: stopp control, worker, public, broker og firmware-builder, behold diskbackup og bruk UUID fra backuplisten:
 
 ```sh
 docker run --rm --user 70001:70007 --env-file .env \
@@ -103,3 +103,5 @@ docker run --rm --user 70001:70007 --env-file .env \
 For utvikling brukes utviklingsmappen og miljøfilen. Verktøyet verifiserer SHA-256, integritet og miljø og tar en ekstra kopi av gjeldende database. Det kan ikke bevise at operatøren faktisk har stoppet andre prosesser; kjør det aldri mot aktiv stack. Sesjoner slettes, uferdige tester tilbakeføres og gamle kommandoer kanselleres. Kommandosekvensen økes for å unngå replay etter eldre snapshot. Faktiske enhetsinnstillinger må avstemmes før normal drift.
 
 Restore bytter datakopiens generasjons-ID. Ved neste oppstart tømmer arbeideren den offentlige værdatakopien og bygger den på nytt, slik at nyere cachedata fra før restore ikke beholdes. Ikke slett hoveddatabasen, hemmelighetene eller stasjonsarkivet. Hostbackup og rollback-/nettverksfeil må inngå i akseptansetesten.
+
+Innstillingene ligger i egen MariaDB-database. Før oppgradering og restore må `WG_CONFIG_DB_*` være satt; sikkerhetskopiene inkluderer både SQL-innstillinger og lokal værhistorikk. Se [oppgraderingsveiledningen](operations-20261021.md).

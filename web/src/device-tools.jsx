@@ -14,6 +14,8 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
     [checked, setChecked] = useState(false),
     [progress, setProgress] = useState(0);
   const [serverBuildId, setServerBuildId] = useState(null);
+  const [flashPhase, setFlashPhase] = useState('');
+  const [activeTool, setActiveTool] = useState(admin ? 'firmware' : 'logs');
   const [network, setNetwork] = useState(false),
     [networkState, setNetworkState] = useState(''),
     [baud, setBaud] = useState(115200);
@@ -174,6 +176,26 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
         <h2>ESP32 · USB-flashing og sanntidslogg</h2>
       </div>
       <div className="settings-form">
+        <div className="tool-tabs" role="tablist" aria-label="ESP32-verktøy">
+          {admin && (
+            <button
+              role="tab"
+              aria-selected={activeTool === 'firmware'}
+              disabled={busy || network || mode !== 'disconnected'}
+              onClick={() => setActiveTool('firmware')}
+            >
+              Firmware og flashing
+            </button>
+          )}
+          <button
+            role="tab"
+            aria-selected={activeTool === 'logs'}
+            disabled={busy || network || mode !== 'disconnected'}
+            onClick={() => setActiveTool('logs')}
+          >
+            Sanntidslogger
+          </button>
+        </div>
         <div className="form-grid">
           <label>
             Stasjon
@@ -190,28 +212,30 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
               ))}
             </select>
           </label>
-          <label>
-            Loggkilde
-            <select
-              value={source}
-              disabled={busy || network || mode !== 'disconnected'}
-              onChange={(e) => {
-                setSource(e.target.value);
-                setText('');
-                setError('');
-              }}
-            >
-              <option value="usb">USB på denne datamaskinen</option>
-              <option value="mqtt">Nettverk via gateway/MQTT</option>
-            </select>
-          </label>
+          {activeTool === 'logs' && (
+            <label>
+              Loggkilde
+              <select
+                value={source}
+                disabled={busy || network || mode !== 'disconnected'}
+                onChange={(e) => {
+                  setSource(e.target.value);
+                  setText('');
+                  setError('');
+                }}
+              >
+                <option value="usb">USB på denne datamaskinen</option>
+                <option value="mqtt">Nettverk via gateway/MQTT</option>
+              </select>
+            </label>
+          )}
         </div>
         {error && (
           <p className="notice error" role="alert">
             {error}
           </p>
         )}
-        {admin && stationId && (
+        {admin && stationId && activeTool === 'firmware' && (
           <FirmwareBuilder
             key={`${environment}:${stationId}`}
             stationId={stationId}
@@ -231,44 +255,48 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
             }}
           />
         )}
-        {source === 'usb' ? (
+        {source === 'usb' || activeTool === 'firmware' ? (
           <>
             {!usbAvailable && (
               <p className="notice">
                 USB krever Chrome eller Edge på en datamaskin. Åpne adminpanelet med HTTPS eller localhost.
               </p>
             )}
-            <div className="actions">
-              <label>
-                Hastighet
-                <select
-                  value={baud}
-                  disabled={mode !== 'disconnected'}
-                  onChange={(e) => setBaud(Number(e.target.value))}
-                >
-                  {[115200, 9600, 19200, 57600, 230400].map((n) => (
-                    <option key={n}>{n}</option>
-                  ))}
-                </select>
-              </label>
-              <button
-                disabled={!usbAvailable || mode !== 'disconnected'}
-                onClick={() => run(() => controller.current.readLogs(baud))}
-              >
-                Koble til USB-logg
-              </button>
-              <button
-                disabled={mode !== 'reading'}
-                onClick={() => run(() => controller.current.disconnect())}
-              >
-                Koble fra USB
-              </button>
-            </div>
-            <p className="muted small">
-              USB: {mode === 'reading' ? 'Leser sanntidslogg' : busy ? 'Opptatt' : 'Frakoblet'}. Standard
-              firmware bruker 115200 baud. Lukk andre programmer som bruker COM-porten.
-            </p>
-            {admin && (
+            {activeTool === 'logs' && (
+              <>
+                <div className="actions">
+                  <label>
+                    Hastighet
+                    <select
+                      value={baud}
+                      disabled={mode !== 'disconnected'}
+                      onChange={(e) => setBaud(Number(e.target.value))}
+                    >
+                      {[115200, 9600, 19200, 57600, 230400].map((n) => (
+                        <option key={n}>{n}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    disabled={!usbAvailable || mode !== 'disconnected'}
+                    onClick={() => run(() => controller.current.readLogs(baud))}
+                  >
+                    Koble til USB-logg
+                  </button>
+                  <button
+                    disabled={mode !== 'reading'}
+                    onClick={() => run(() => controller.current.disconnect())}
+                  >
+                    Koble fra USB
+                  </button>
+                </div>
+                <p className="muted small">
+                  USB: {mode === 'reading' ? 'Leser sanntidslogg' : busy ? 'Opptatt' : 'Frakoblet'}. Standard
+                  firmware bruker 115200 baud. Lukk andre programmer som bruker COM-porten.
+                </p>
+              </>
+            )}
+            {admin && activeTool === 'firmware' && (
               <div className="usb-flash-box">
                 <h3>Flash ESP32 via USB</h3>
                 <p>
@@ -310,8 +338,9 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
                   onClick={() =>
                     run(async () => {
                       setProgress(0);
-                      await controller.current.flash(bundle, {
+                      const result = await controller.current.flash(bundle, {
                         progress: setProgress,
+                        phase: setFlashPhase,
                         authorize: () =>
                           apiRef.current(`/devices/${stationId}/flash/verify`, {
                             manifest: bundle.manifest,
@@ -319,7 +348,9 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
                           }),
                       });
                       if (serverBuildId)
-                        await apiRef.current(`/firmware-builds/${serverBuildId}/usb-complete`, {});
+                        await apiRef.current(`/firmware-builds/${serverBuildId}/usb-complete`, {
+                          bootConfirmed: result.bootConfirmed,
+                        });
                       setChecked(false);
                     })
                   }
@@ -331,6 +362,11 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
                     <progress max="100" value={progress} aria-label="Flashing og verifisering" />
                     <span>{progress}%</span>
                   </div>
+                )}
+                {flashPhase && (
+                  <p role="status" className="notice">
+                    {flashPhase}
+                  </p>
                 )}
                 <p className="muted small">
                   Hvis tilkoblingen stopper: hold BOOT inne mens enheten kobles til, og slipp når chipen er
@@ -367,32 +403,40 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
             </p>
           </>
         )}
-        <div className="actions terminal-controls">
-          <button onClick={() => setPaused(!paused)}>{paused ? 'Fortsett visning' : 'Pause visning'}</button>
-          <button onClick={() => setText('')}>Tøm visning</button>
-          <button disabled={!text} onClick={save}>
-            Last ned logg
-          </button>
-          <label>
-            Filtrer linjer
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Søk i loggen"
-            />
-          </label>
-        </div>
-        <pre className="device-terminal" ref={terminal} aria-label="ESP32 sanntidslogg" tabIndex="0">
-          {text
-            ? text
-                .split('\n')
-                .filter((line) => !search || line.toLowerCase().includes(search.toLowerCase()))
-                .join('\n')
-            : 'Ingen logglinjer mottatt.'}
-        </pre>
-        {paused && (
-          <p className="muted small">Visningen er pauset. Nye linjer vises fra tidspunktet du fortsetter.</p>
+        {(activeTool === 'logs' || progress > 0 || busy) && (
+          <>
+            <div className="actions terminal-controls">
+              <button onClick={() => setPaused(!paused)}>
+                {paused ? 'Fortsett visning' : 'Pause visning'}
+              </button>
+              <button onClick={() => setText('')}>Tøm visning</button>
+              <button disabled={!text} onClick={save}>
+                Last ned logg
+              </button>
+              <label>
+                Filtrer linjer
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Søk i loggen"
+                />
+              </label>
+            </div>
+            <pre className="device-terminal" ref={terminal} aria-label="ESP32 sanntidslogg" tabIndex="0">
+              {text
+                ? text
+                    .split('\n')
+                    .filter((line) => !search || line.toLowerCase().includes(search.toLowerCase()))
+                    .join('\n')
+                : 'Ingen logglinjer mottatt.'}
+            </pre>
+            {paused && (
+              <p className="muted small">
+                Visningen er pauset. Nye linjer vises fra tidspunktet du fortsetter.
+              </p>
+            )}
+          </>
         )}
       </div>
     </section>

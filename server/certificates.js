@@ -495,6 +495,7 @@ export class CertificateManager {
         'db-ca.pem',
         'database-client.pem',
         'database-client.key',
+        'weather-db-encryption.key',
       ],
       public: ['read-token'],
     };

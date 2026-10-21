@@ -36,6 +36,13 @@ for (const env of ['production', 'development']) {
     WG_PRODUCTION_ORIGIN: '${WG_PRODUCTION_ORIGIN}',
   };
   const databases = {
+    WG_CONFIG_DB_HOST: '${WG_CONFIG_DB_HOST:?Sett SQL-vert for weathergateway}',
+    WG_CONFIG_DB_PORT: '${WG_CONFIG_DB_PORT:-3306}',
+    WG_CONFIG_DB_DATABASE: env === 'production' ? 'weathergateway' : 'weathergateway_development',
+    WG_CONFIG_DB_USER: '${WG_CONFIG_DB_USER:?Sett bruker for weathergateway}',
+    WG_CONFIG_DB_PASSWORD: '${WG_CONFIG_DB_PASSWORD:-}',
+    WG_CONFIG_DB_TLS: '${WG_CONFIG_DB_TLS:-false}',
+    WG_CONFIG_DB_CA_FILE: '${WG_CONFIG_DB_CA_FILE:-}',
     WG_DB_ALLOWED_DATABASES: '${WG_DB_ALLOWED_DATABASES:-}',
     WG_DB_LAN_ENDPOINTS: '${WG_DB_LAN_ENDPOINTS:-}',
     WG_DB_PASSWORD: '${WG_DB_PASSWORD:-}',
@@ -144,7 +151,8 @@ for (const env of ['production', 'development']) {
           public: publicApi,
           broker,
           'firmware-builder': {
-            image: '${WG_FIRMWARE_BUILDER_IMAGE:-janlon6260/weathergateway:firmware-builder}',
+            image:
+              '${WG_FIRMWARE_BUILDER_IMAGE:-espressif/idf:v6.1@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c}',
             user: '70001:70007',
             init: true,
             restart: 'unless-stopped',
@@ -152,7 +160,18 @@ for (const env of ['production', 'development']) {
             cap_drop: ['ALL'],
             security_opt: ['no-new-privileges:true'],
             network_mode: 'none',
-            environment: { WG_ENVIRONMENT: env },
+            command: ['python', '/opt/wg-builder/worker.py'],
+            environment: {
+              WG_ENVIRONMENT: env,
+              HOME: '/tmp',
+              WG_BUILD_JOBS: '/jobs',
+              WG_BUILD_WORK: '/workspace',
+              WG_FIRMWARE_TEMPLATE: '/opt/wg-builder/firmware',
+              IDF_COMPONENT_MANAGER: '0',
+              IDF_PY_BUILD_JOBS: '2',
+              CMAKE_BUILD_PARALLEL_LEVEL: '2',
+              PYTHONUTF8: '1',
+            },
             mem_limit: '3g',
             cpus: '2.0',
             pids_limit: 256,
@@ -160,6 +179,7 @@ for (const env of ['production', 'development']) {
             volumes: [
               bind(`${root}/system/firmware-builds`, '/jobs', false),
               bind(`${root}/system/firmware-build-cache`, '/workspace', false),
+              bind(`${root}/system/firmware-builder-runtime`, '/opt/wg-builder'),
             ],
             depends_on: { prepare: { condition: 'service_completed_successfully' } },
             logging: base.logging,

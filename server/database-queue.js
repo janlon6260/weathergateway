@@ -10,7 +10,7 @@ export const databaseTargetHash = (target) =>
       Object.entries(target)
         .filter(
           ([key, value]) =>
-            !['enabled', 'intervalSeconds', 'user', 'passwordEnv', 'transport'].includes(key) &&
+            !['enabled', 'loggingEnabled', 'intervalSeconds', 'user', 'passwordEnv','passwordSecret', 'transport'].includes(key) &&
             !(key === 'stationNameColumn' && value === null),
         )
         .map(([key, value]) => [
@@ -26,10 +26,20 @@ export const databaseTargetHash = (target) =>
     ),
   );
 export function queueDatabaseObservation(store, station, body) {
+  if (
+    store.current('gateway').value.databaseLoggingEnabled === false ||
+    store.confirmedValue('gateway').databaseLoggingEnabled === false
+  )
+    return;
   const setting = store.db.prepare('SELECT 1 FROM configuration WHERE scope=?').get(`database:${station.id}`);
   if (!setting || !body.sensorContact) return;
   const target = store.confirmedValue(`database:${station.id}`);
-  if (!target.enabled) return;
+  if (
+    !target.enabled ||
+    target.loggingEnabled === false ||
+    store.current(`database:${station.id}`).value.loggingEnabled === false
+  )
+    return;
   const observed = Date.parse(body.observedAt),
     targetHash = databaseTargetHash(target);
   const last = store.db
@@ -162,6 +172,10 @@ export function databaseStatus(store) {
       lastDeliveredAt: delivery?.last_delivered_at ?? null,
       lastError: delivery?.last_error ?? null,
       confirmedEnabled: confirmed.enabled,
+      loggingActive:
+        confirmed.enabled &&
+        confirmed.loggingEnabled !== false &&
+        store.current(item.scope).value.loggingEnabled !== false && store.current('gateway').value.databaseLoggingEnabled!==false && store.confirmedValue('gateway').databaseLoggingEnabled !== false,
     };
   });
 }

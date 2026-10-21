@@ -1,5 +1,8 @@
 import mysql from 'mysql2/promise';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { SettingsSecrets } from './settings-secrets.js';
 import { databaseSchema } from './schema.js';
 import { Rejected, hash } from './store.js';
 import { databaseTargetHash } from './database-queue.js';
@@ -38,6 +41,13 @@ export class WeatherDatabase {
     this.pools = new Map();
     this.closed = false;
     this.running = null;
+    this.secrets = new SettingsSecrets(
+      store,
+      config.role === 'worker' && config.mqttKeyFile
+        ? dirname(config.mqttKeyFile)
+        : config.certificateRoot || store.safe('system', 'certificates'),
+      { keyName: 'weather-db-encryption.key' },
+    );
     this.cleanup = setInterval(() => {
       for (const [key, entry] of this.pools)
         if (!entry.borrowed && Date.now() - entry.used > 120000) {
@@ -54,7 +64,9 @@ export class WeatherDatabase {
       throw new Rejected('Databasen er ikke tillatt i WG_DB_ALLOWED_DATABASES for dette miljøet', 409);
     if (this.store.environment !== 'production' && !target.database.startsWith('wg_dev_'))
       throw new Rejected('Utvikling kan bare bruke isolerte databaser med prefikset wg_dev_', 409);
-    const password = this.config.databasePasswords?.[target.passwordEnv];
+    const password = target.passwordSecret
+      ? this.secrets.get(target.passwordSecret)
+      : this.config.databasePasswords?.[target.passwordEnv];
     if (!password) throw new Rejected(`Databasepassord mangler i ${target.passwordEnv}`, 409);
     let transport;
     if (target.transport === 'lan') transport = lanTransport(target, this.config.databaseLanEndpoints);
@@ -93,6 +105,20 @@ export class WeatherDatabase {
       timezone: 'Z',
       ...transport,
     };
+  }
+  savePassword(value, actor) {
+    if (typeof value !== 'string' || !value.length || value.length > 1024)
+      throw new Rejected('Databasepassord må være 1–1024 tegn', 400);
+    const name = this.secrets.set(`weather-db:${randomUUID()}`, value),
+      role = join(this.config.certificateRoot, 'roles', 'worker');
+    mkdirSync(role, { recursive: true, mode: 0o750 });
+    const target = join(role, 'weather-db-encryption.key'),
+      key = this.secrets.key(false);
+    if (!existsSync(target)) writeFileSync(target, key, { flag: 'wx', mode: 0o400 });
+    else if (!readFileSync(target).equals(key))
+      throw new Rejected('Arbeiderens databasenøkkel stemmer ikke med kontrollserveren', 503);
+    this.store.audit(actor, 'database_password_stored', { reference: name });
+    return name;
   }
   async connection(target, operation) {
     if (this.closed) throw new Rejected('Databasearbeideren stopper', 503);
@@ -147,11 +173,8 @@ export class WeatherDatabase {
       throw new Rejected('Kolonnen for stasjonsnavn må kunne lagre tekst', 409);
     const numericTypes = ['decimal', 'float', 'double', 'tinyint', 'smallint', 'mediumint', 'int', 'bigint'];
     for (const [metric, name] of Object.entries(target.columns).filter(([, name]) => Boolean(name)))
-      if (
-        (!calendarDatabaseMetrics.has(metric) && byName.get(name).nullable !== 'YES') ||
-        !numericTypes.includes(byName.get(name).type)
-      )
-        throw new Rejected(`Målekolonnen ${name} må være numerisk og tillate NULL`, 409);
+      if (!numericTypes.includes(byName.get(name).type))
+        throw new Rejected(`Målekolonnen ${name} må være numerisk`, 409);
     if (
       columns.some(
         (column) =>
@@ -199,6 +222,15 @@ export class WeatherDatabase {
       table: 'wx_data',
       uniqueKey: 'ok',
       writePerformed: false,
+      columns: columns.map(({ name, type, nullable, defaultValue }) => ({
+        name,
+        type,
+        nullable,
+        defaultValue,
+      })),
+      defaultedColumns: columns
+        .filter((c) => c.nullable === 'NO' && c.defaultValue !== null)
+        .map((c) => c.name),
       integerColumns: required.filter((name) =>
         ['tinyint', 'smallint', 'mediumint', 'int', 'bigint'].includes(byName.get(name).type),
       ),
@@ -232,7 +264,15 @@ export class WeatherDatabase {
   async deliver(scope) {
     const target = this.store.confirmedValue(scope),
       targetHash = databaseTargetHash(target);
-    if (!target.enabled || !this.store.confirmedValue(`station:${target.stationId}`).enabled) return;
+    if (
+      !target.enabled ||
+      target.loggingEnabled === false ||
+      this.store.current(scope).value.loggingEnabled === false ||
+      this.store.current('gateway').value.databaseLoggingEnabled === false ||
+      this.store.confirmedValue('gateway').databaseLoggingEnabled === false ||
+      !this.store.confirmedValue(`station:${target.stationId}`).enabled
+    )
+      return;
     const first = this.store.db
       .prepare(
         'SELECT * FROM database_outbox WHERE station_id=? AND target_hash=? ORDER BY observed_at,id LIMIT 1',
@@ -246,12 +286,18 @@ export class WeatherDatabase {
         if (Date.now() - entry.checkedAt > 300000) {
           const report = await this.inspect(execute, target);
           entry.integerColumns = report.integerColumns;
+          entry.defaultedColumns = report.defaultedColumns;
+          entry.columns = report.columns;
           entry.checkedAt = Date.now();
         }
         for (let count = 0; count < 20 && !this.closed; count++) {
           const active = this.store.confirmedValue(scope);
           if (
             !active.enabled ||
+            active.loggingEnabled === false ||
+            this.store.current(scope).value.loggingEnabled === false ||
+            this.store.current('gateway').value.databaseLoggingEnabled === false ||
+            this.store.confirmedValue('gateway').databaseLoggingEnabled === false ||
             hash(active) !== hash(target) ||
             !this.store.confirmedValue(`station:${target.stationId}`).enabled
           )
@@ -273,6 +319,7 @@ export class WeatherDatabase {
             .run(leasedUntil, current.id, this.store.clock()).changes;
           if (!claimed) break;
           const row = JSON.parse(current.row_json);
+          for (const name of entry.defaultedColumns || []) if (row[name] === null) delete row[name];
           for (const name of entry.integerColumns || [])
             if (typeof row[name] === 'number')
               row[name] = row[name] < 0 ? -Math.round(-row[name]) : Math.round(row[name]);

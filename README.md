@@ -26,7 +26,7 @@ Ekstern databaseskriving konfigureres under **Databaser** i adminpanelet, med pa
 
 ## Docker og Portainer
 
-Firmware kompileres nå på serveren fra **Enheter → Bygg firmware på serveren**. Angi gatewayadresse, MQTT-port og Wi-Fi, og installer via nettleserens USB eller eksisterende MQTT/TLS med test/bekreft. [Byggtjenesten](docs/firmware-server-builds.md) bruker et separat `janlon6260/weathergateway:firmware-builder`-image uten nettverk og med UID 70001/GID 70007. GitHub-workflowen bygger og publiserer også dette imaget uten tester.
+Firmware kompileres nå på serveren fra **Enheter → Bygg firmware på serveren**. Angi gatewayadresse, MQTT-port og Wi-Fi, og installer via nettleserens USB eller eksisterende MQTT/TLS med test/bekreft. [Byggtjenesten](docs/firmware-server-builds.md) bruker Espressifs offisielle ESP-IDF 6.1-image uten nettverk og med UID 70001/GID 70007. GitHub-workflowen publiserer bare app-imaget, med parallelle native bygg og uten tester.
 
 [Driftsveiledningen](docs/deployment.md) beskriver bygg, `.env`, hemmelighetsfiler, klargjøring av disken, Portainer, sikkerhetskopi og gjenoppretting. Apache2-konfigurasjonen utføres senere, som avtalt.
 
@@ -50,3 +50,5 @@ Miljøknappen åpner den andre, selvstendige installasjonen. Utviklingsendringer
 - [Sertifikater fra adminpanelet og Docker-oppstart uten sertifikatfiler](docs/certificates.md).
 
 Sunnmørsvær-prosjektet er lest lokalt og ikke endret. Den delte ChatGPT-lenken ga ikke tilgang til samtaleinnholdet.
+
+Alle administrasjonsinnstillinger lagres nå i egen MariaDB-database `weathergateway` (utvikling: `weathergateway_development`). Sett `WG_CONFIG_DB_*` før oppstart. Se [oppgradering og nye funksjoner](docs/operations-20261021.md).

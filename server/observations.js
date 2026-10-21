@@ -12,6 +12,7 @@ import { currentSolarMaximum } from './astronomy.js';
 import { calibrate, assessQuality } from './data-quality.js';
 import { renderTemplate } from './reports.js';
 import { recordRainIncrement, rainWindow, rainStatistics } from './rain-statistics.js';
+import { retainDisplay } from './admin-live.js';
 
 const fields = {
   temperatureC: 'temp',
@@ -194,6 +195,7 @@ export function ingest(store, identity, input, { enqueueDatabase = true, histori
           .prepare('UPDATE observations SET body=? WHERE station_id=? AND boot_id=? AND sequence=?')
           .run(JSON.stringify(body), identity, message.bootId, message.sequence);
         if (enqueueDatabase) queueDatabaseObservation(store, station, body);
+        if (!historical) retainDisplay(store,identity,body);
       }
       return result.changes;
     })

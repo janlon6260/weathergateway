@@ -1,4 +1,5 @@
 import { validateUsbManifest } from '../../shared/usb-firmware.js';
+import { deadline, stopTransport, readFlashSegment, confirmUsbBoot } from './usb-protocol.js';
 
 export function terminalText(text) {
   return String(text)
@@ -47,8 +48,9 @@ export class DeviceSerial {
     state = () => {},
     error = () => {},
     loadFlasher = () => import('esptool-js'),
+    confirmBoot = confirmUsbBoot,
   } = {}) {
-    Object.assign(this, { serial, output, state, error, loadFlasher });
+    Object.assign(this, { serial, output, state, error, loadFlasher, confirmBoot });
     this.mode = 'disconnected';
   }
   setMode(mode) {
@@ -117,64 +119,134 @@ export class DeviceSerial {
       await this.reading;
     }
   }
-  async flash(bundle, { authorize, progress = () => {}, baudrate = 460800 } = {}) {
+  async flash(
+    bundle,
+    { authorize, progress = () => {}, phase = () => {}, baudrate = 460800, idleMs = 6000 } = {},
+  ) {
     const port = await this.select();
     let transport;
     try {
       this.setMode('flashing');
-      await authorize(); // Fresh AD session, role, signature and credential check immediately before device writes.
-      const { ESPLoader, Transport } = await this.loadFlasher();
-      transport = new Transport(port, false);
-      const loader = new ESPLoader({
-        transport,
-        baudrate,
-        debugLogging: false,
-        terminal: { clean: () => {}, write: (s) => this.output(s), writeLine: (s) => this.output(`${s}\n`) },
-      });
-      await loader.detectChip();
-      if (loader.chip?.CHIP_NAME !== 'ESP32') throw new Error('Pakken krever ESP-WROOM-32 (klassisk ESP32).');
-      // ESP32 lacks GET_SECURITY_INFO. Read-only eFuse checks follow Espressif esptool/targets/esp32.py.
-      const crypt = ((await loader.readReg(0x3ff5a000)) >>> 20) & 0x7f;
-      const secureBoot = (await loader.readReg(0x3ff5a018)) & 0x30;
-      if (crypt || secureBoot)
-        throw new Error(
-          'Enheten er maskinvaresikret eller har sikkerhets-eFuses satt. Bruk signert OTA/ESP-IDF for denne enheten.',
-        );
-      await loader.runStub();
-      if (!loader.IS_STUB) throw new Error('Flash-verktøyet kunne ikke starte RAM-stubben.');
-      if (loader.romBaudrate !== baudrate) await loader.changeBaud();
-      if ((await loader.detectFlashSize()) !== '4MB')
-        throw new Error('USB-pakken krever en ESP32 med 4 MB flash.');
+      await deadline(authorize, 15000, 'Gatewayen svarte ikke på flashgodkjenningen');
+      const { ESPLoader, Transport } = await deadline(
+        () => this.loadFlasher(),
+        15000,
+        'Flash-verktøyet kunne ikke lastes',
+      );
+      const connect = async () => {
+        transport = new Transport(port, false);
+        const loader = new ESPLoader({
+          transport,
+          baudrate,
+          debugLogging: false,
+          terminal: {
+            clean: () => {},
+            write: (s) => this.output(s),
+            writeLine: (s) => this.output(`${s}\n`),
+          },
+        });
+        await deadline(() => loader.detectChip(), 20000, 'ESP32 svarte ikke under tilkobling');
+        if (loader.chip?.CHIP_NAME !== 'ESP32')
+          throw new Error('Pakken krever ESP-WROOM-32 (klassisk ESP32).');
+        // ESP32 lacks GET_SECURITY_INFO. Read-only eFuse checks follow Espressif esptool/targets/esp32.py.
+        const crypt =
+          ((await deadline(() => loader.readReg(0x3ff5a000), 5000, 'eFuse-kontrollen svarte ikke')) >>> 20) &
+          0x7f;
+        const secureBoot =
+          (await deadline(() => loader.readReg(0x3ff5a018), 5000, 'Secure Boot-kontrollen svarte ikke')) &
+          0x30;
+        if (crypt || secureBoot)
+          throw new Error(
+            'Enheten er maskinvaresikret eller har sikkerhets-eFuses satt. Bruk signert OTA/ESP-IDF for denne enheten.',
+          );
+        await deadline(() => loader.runStub(), 20000, 'Flash-stubben svarte ikke');
+        if (!loader.IS_STUB) throw new Error('Flash-verktøyet kunne ikke starte RAM-stubben.');
+        if (loader.romBaudrate !== baudrate)
+          await deadline(() => loader.changeBaud(), 10000, 'Bytte av USB-hastighet svarte ikke');
+        if (
+          (await deadline(() => loader.detectFlashSize(), 10000, 'Flash-størrelsen kunne ikke leses')) !==
+          '4MB'
+        )
+          throw new Error('USB-pakken krever en ESP32 med 4 MB flash.');
+        return loader;
+      };
+      phase('Kobler til ESP32');
+      let loader = await connect();
       this.output('Sletter flash og skriver den signerte stasjonspakken …\n');
-      await loader.writeFlash({
-        fileArray: bundle.segments,
-        flashSize: 'keep',
-        flashMode: 'keep',
-        flashFreq: 'keep',
-        eraseAll: true,
-        compress: true,
-        reportProgress: (index, written, total) =>
-          progress(Math.floor(((index + written / total) / 8) * 100)),
-      });
-      for (let i = 0; i < bundle.segments.length; i++) {
-        const segment = bundle.segments[i];
-        const bytes = await loader.readFlash(segment.address, segment.data.length);
-        const digest = await crypto.subtle.digest('SHA-256', bytes);
-        const hex = Array.from(new Uint8Array(digest), (n) => n.toString(16).padStart(2, '0')).join('');
-        if (hex !== bundle.manifest.segments[i].sha256)
-          throw new Error('Verifisering etter skriving feilet. Enheten forblir i bootloader.');
-        progress(Math.floor(((4 + i + 1) / 8) * 100));
-      }
-      await loader.after('hard_reset');
-      this.output('Alle fire flashsegmenter er lest tilbake og SHA-256-verifisert. ESP32 starter.\n');
-    } finally {
-      if (transport) {
+      phase('Sletter og skriver firmware');
+      await deadline(
+        () =>
+          loader.writeFlash({
+            fileArray: bundle.segments,
+            flashSize: 'keep',
+            flashMode: 'keep',
+            flashFreq: 'keep',
+            eraseAll: true,
+            compress: true,
+            reportProgress: (index, written, total) =>
+              progress(Math.floor(((index + written / total) / 4) * 75)),
+          }),
+        180000,
+        'Skrivingen svarte ikke innen tre minutter. Koble til på nytt og flash pakken igjen.',
+      );
+      let verified = false;
+      for (let attempt = 0; attempt < 2 && !verified; attempt++) {
         try {
-          await transport.disconnect();
-        } catch {
-          /* Device disconnected. */
+          phase(
+            attempt ? 'Kontrollerer på nytt etter gjenoppkobling' : 'Leser tilbake og verifiserer SHA-256',
+          );
+          const total = bundle.segments.reduce((sum, s) => sum + s.data.length, 0);
+          let done = 0;
+          for (let i = 0; i < bundle.segments.length; i++) {
+            const segment = bundle.segments[i];
+            const bytes = await deadline(
+              () =>
+                readFlashSegment(
+                  loader,
+                  transport,
+                  segment.address,
+                  segment.data.length,
+                  (count) => progress(75 + Math.floor(((done + count) / total) * 19)),
+                  idleMs,
+                ),
+              Math.max(20000, ((segment.data.length * 8) / baudrate) * 3000 + 10000),
+              'Tilbakeavlesingen tok for lang tid',
+            );
+            const digest = await crypto.subtle.digest('SHA-256', bytes);
+            const hex = Array.from(new Uint8Array(digest), (n) => n.toString(16).padStart(2, '0')).join('');
+            if (hex !== bundle.manifest.segments[i].sha256)
+              throw new Error('Verifisering etter skriving feilet. Enheten forblir i bootloader.');
+            done += segment.data.length;
+          }
+          verified = true;
+        } catch (error) {
+          if (attempt || /Verifisering|Ugyldig flashpakke/.test(error.message)) throw error;
+          phase('USB svarte ikke. Kobler til på nytt uten å skrive firmware igjen.');
+          await stopTransport(transport, port);
+          loader = await connect();
         }
       }
+      progress(95);
+      phase('Starter ESP32 og venter på oppstartskvittering');
+      await deadline(() => loader.after('hard_reset'), 5000, 'Kunne ikke starte ESP32 etter verifisering');
+      await stopTransport(transport, port);
+      transport = null;
+      this.output('Alle fire flashsegmenter er lest tilbake og SHA-256-verifisert. ESP32 starter.\n');
+      const bootConfirmed = await deadline(
+        () => this.confirmBoot(port, bundle.manifest, this.output),
+        26000,
+        'Oppstartskontrollen svarte ikke',
+      );
+      if (bootConfirmed) {
+        progress(100);
+        phase('Ferdig – firmware og oppstart er bekreftet');
+      } else {
+        phase('Firmware er verifisert. Oppstart ble ikke bekreftet – åpne USB-loggen.');
+        this.output('Oppstartskvittering mangler. Ingen automatisk ny flashing eller sletting utføres.\n');
+      }
+      return { verified: true, bootConfirmed };
+    } finally {
+      if (transport) await stopTransport(transport, port);
       this.port = null;
       this.setMode('disconnected');
     }

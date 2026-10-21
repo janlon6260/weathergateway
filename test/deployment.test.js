@@ -32,7 +32,17 @@ test('Portainer stacks have independent literal mounts, ports and networks', () 
     assert.equal(stack.services.prepare.user, '70001:70007');
     assert.equal(stack.services.prepare.network_mode, 'none');
     assert.equal(stack.services['firmware-builder'].network_mode, 'none');
-    assert.equal(stack.services['firmware-builder'].volumes.length, 2);
+    assert.equal(stack.services['firmware-builder'].volumes.length, 3);
+    assert.ok(stack.services['firmware-builder'].image.includes('espressif/idf:v6.1@sha256:'));
+    assert.equal(
+      stack.services['firmware-builder'].volumes.find((v) => v.target === '/opt/wg-builder').read_only,
+      true,
+    );
+    assert.equal(
+      stack.services.control.environment.WG_CONFIG_DB_DATABASE,
+      environment === 'production' ? 'weathergateway' : 'weathergateway_development',
+    );
+    assert.equal(Object.hasOwn(stack.services.public.environment, 'WG_CONFIG_DB_PASSWORD'), false);
     assert.equal(
       stack.services['firmware-builder'].volumes.some((v) => v.source.includes('/secrets/')),
       false,

@@ -1,6 +1,6 @@
 # Beregninger og sporbarhet
 
-Interne enheter er m/s, °C, hPa, mm og W/m². Avrunding skjer ved presentasjon/eksport. Ugyldige eller manglende innganger blir `null`, tom streng i legacy-filer og SQL `NULL`; de blir ikke tallet 0. Metodeversjoner er `wg-meteo-2`, `wg-iss-1` og `wg-climate-1`.
+Interne enheter er m/s, °C, hPa, mm og W/m². Avrunding skjer ved presentasjon/eksport. Ugyldige eller manglende innganger blir `null` og tom streng i legacy-filer. SQL bruker NULL når kolonnen tillater det; opprinnelige Weather Display-kolonner med NOT NULL bruker sine eksisterende standardverdier. Se [databaseveiledningen](weather-database.md). Metodeversjoner er `wg-meteo-2`, `wg-iss-1` og `wg-climate-1`.
 
 | Størrelse          | Metode og forutsetninger                                                                                                                                                                                                                                        |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

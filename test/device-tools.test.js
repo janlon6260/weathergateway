@@ -123,11 +123,20 @@ test('USB flasher checks eFuses before a RAM stub, verifies flash readback and a
   let corrupted = false,
     secured = false;
   class Transport {
+    packets=[];
+    async read(){return this.packets.shift();}
+    async write(){}
     async disconnect() {
       events.push('disconnect');
     }
   }
   class Loader {
+    constructor({transport}){this.transport=transport;}
+    ESP_READ_FLASH=0xd2;
+    async checkCommand(_name,_command,packet){
+      const address=new DataView(packet.buffer).getUint32(0,true);
+      this.transport.packets=[corrupted?new Uint8Array(1024):memory.get(address),new Uint8Array(16)];return 0;
+    }
     chip = { CHIP_NAME: 'ESP32' };
     romBaudrate = 115200;
     async detectChip() {
@@ -165,12 +174,13 @@ test('USB flasher checks eFuses before a RAM stub, verifies flash readback and a
       },
     },
     loadFlasher: async () => ({ Transport, ESPLoader: Loader }),
+    confirmBoot:async()=>{events.push('boot');return true;},
   });
   const authorize = async () => events.push('authorize');
   await controller.flash(bundle, { authorize });
   assert.ok(events.indexOf('efuse') < events.indexOf('stub'));
   assert.ok(events.indexOf('authorize') < events.indexOf('write'));
-  assert.deepEqual(events.slice(-2), ['reset', 'disconnect']);
+  assert.deepEqual(events.slice(-3), ['reset', 'disconnect','boot']);
   assert.equal(controller.mode, 'disconnected');
   events.length = 0;
   corrupted = true;

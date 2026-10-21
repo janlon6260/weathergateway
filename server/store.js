@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, lstatSync, realpath
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { validateScope, id } from './schema.js';
+import { ConfigurationDatabase } from './config-database.js';
 
 export const hash = (value) =>
   createHash('sha256')
@@ -42,6 +43,11 @@ CREATE TABLE IF NOT EXISTS firmware_releases(id TEXT PRIMARY KEY,station_id TEXT
 CREATE TABLE IF NOT EXISTS firmware_builds(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,state TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,payload TEXT NOT NULL,release_id TEXT,error TEXT,log TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS telemetry_rejections(station_id TEXT NOT NULL,boot_id TEXT NOT NULL,sequence INTEGER NOT NULL,received_at INTEGER NOT NULL,reason TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,boot_id,sequence));
 CREATE TABLE IF NOT EXISTS device_status(station_id TEXT PRIMARY KEY,received_at INTEGER NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS station_display(station_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings_secrets(name TEXT PRIMARY KEY,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS notification_state(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS notification_outbox(id TEXT PRIMARY KEY,created_at INTEGER NOT NULL,next_attempt INTEGER NOT NULL,attempts INTEGER NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,sent_at INTEGER,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS notification_pending ON notification_outbox(state,next_attempt);
 CREATE TABLE IF NOT EXISTS device_log_sessions(station_id TEXT PRIMARY KEY,id TEXT NOT NULL,expires_at INTEGER NOT NULL,command_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS device_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,station_id TEXT NOT NULL,boot_id TEXT NOT NULL,sequence INTEGER NOT NULL,received_at INTEGER NOT NULL,payload TEXT NOT NULL,UNIQUE(station_id,boot_id,sequence));
 CREATE INDEX IF NOT EXISTS device_logs_station ON device_logs(station_id,id);
@@ -58,7 +64,14 @@ CREATE TABLE IF NOT EXISTS database_delivery(station_id TEXT NOT NULL,target_has
 `;
 
 export class Store {
-  constructor({ root, environment, readonly = false, clock = Date.now, journalMode = 'WAL' }) {
+  constructor({
+    root,
+    environment,
+    readonly = false,
+    clock = Date.now,
+    journalMode = 'WAL',
+    configurationDatabase,
+  }) {
     if (!['development', 'production', 'test'].includes(environment)) throw new Error('Ugyldig miljø');
     if (!['WAL', 'DELETE'].includes(journalMode)) throw new Error('Ugyldig SQLite-journalmodus');
     this.environment = environment;
@@ -82,6 +95,14 @@ export class Store {
         throw new Error('SQLite-journalmodus kunne ikke aktiveres');
       this.db.pragma('synchronous = FULL');
       this.db.exec(schema);
+      if (configurationDatabase) {
+        try {
+          this.db = new ConfigurationDatabase(this.db, configurationDatabase, environment);
+        } catch (error) {
+          this.db.close();
+          throw error;
+        }
+      }
       if (!this.db.pragma('table_info(commands)').some((c) => c.name === 'sequence'))
         this.db.exec('ALTER TABLE commands ADD COLUMN sequence INTEGER');
       this.db.exec('UPDATE commands SET sequence=rowid WHERE sequence IS NULL');

@@ -24,6 +24,7 @@ import { readiness, acceptanceChecks, deploymentFingerprint } from './readiness.
 import { validitySchema } from './certificate-validity.js';
 import { logSession, readDeviceLogs } from './device-logs.js';
 import { verifyUsbFirmware } from './usb-firmware.js';
+import { adminSnapshot } from './admin-live.js';
 
 const safeGatewayFields = [
   'confirmationSeconds',
@@ -32,6 +33,9 @@ const safeGatewayFields = [
   'retentionDays',
   'warningSeconds',
   'downSeconds',
+  'dataWarningSeconds',
+  'dataDownSeconds',
+  'databaseLoggingEnabled',
 ];
 const asyncHandler = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 function baseApp(config) {
@@ -82,7 +86,7 @@ function errors(app) {
   });
   return app;
 }
-export async function probe(store, directory, change, principal, databaseWriter) {
+export async function probe(store, directory, change, principal, databaseWriter, notifications) {
   if (change.scope.startsWith('device:') || change.scope.startsWith('firmware:')) {
     if (!change.health || store.clock() - change.health.at > 30000)
       throw new Rejected('Venter på bekreftelse og telemetri fra enheten');
@@ -90,6 +94,10 @@ export async function probe(store, directory, change, principal, databaseWriter)
   }
   accessSync(store.safe('system'), constants.R_OK | constants.W_OK);
   const report = { storage: 'ok', schema: 'ok' };
+  if (change.scope === 'notifications') {
+    if (!notifications) throw new Rejected('Varslingstjenesten er ikke tilgjengelig', 503);
+    Object.assign(report, await notifications.verify(change.candidate));
+  }
   if (change.scope === 'gateway')
     Object.assign(report, await directory.probe(principal, change.candidate.directory));
   if (change.scope.startsWith('database:')) {
@@ -113,6 +121,7 @@ export function controlApp({
   certificateManager,
   databaseWriter,
   firmwareBuilds,
+  notifications,
 }) {
   const app = baseApp(config),
     sessions = new Sessions(store, directory, { secure: config.secureCookies }),
@@ -207,6 +216,11 @@ export function controlApp({
       databaseLanEndpoints: admin ? config.databaseLanEndpoints || [] : [],
       firmwareReleases: admin ? firmwareReleases(store) : [],
       alarms: alarmStatus(store),
+      notifications: admin && notifications ? notifications.status() : null,
+      configurationStorage: {
+        backend: store.db.backend || 'sqlite-test',
+        database: config.configurationDatabase?.database || null,
+      },
       devices:
         admin || req.session.principal.roles.includes('operator')
           ? store.configurations('device:').map((device) => {
@@ -242,14 +256,54 @@ export function controlApp({
                   admin ||
                   (c.scope !== 'gateway' &&
                     !c.scope.startsWith('database:') &&
-                    !c.scope.startsWith('firmware:')),
+                    !c.scope.startsWith('firmware:') &&
+                    c.scope !== 'notifications'),
               )
           : [],
       commands: admin || req.session.principal.roles.includes('operator') ? store.commandList() : [],
       now: store.clock(),
     });
   });
-  app.get('/api/live', (_req, res) => res.json(snapshot(store)));
+  app.get('/api/live', (_req, res) => res.json(adminSnapshot(store)));
+  app.get('/api/notifications', permission('administrator'), (_req, res) => {
+    if (!notifications) throw new Rejected('Varslingstjenesten er ikke tilgjengelig', 503);
+    res.json(notifications.status());
+  });
+  app.post('/api/notifications', permission('administrator'), (req, res) => {
+    if (!notifications) throw new Rejected('Varslingstjenesten er ikke tilgjengelig', 503);
+    const body = z
+      .object({ revision: z.number().int().positive(), value: z.record(z.string(), z.unknown()) })
+      .strict()
+      .parse(req.body);
+    res
+      .status(201)
+      .json(
+        store.propose(
+          'notifications',
+          notifications.prepare(body.value),
+          body.revision,
+          req.session.principal.sid,
+        ),
+      );
+  });
+  app.post(
+    '/api/notifications/test',
+    permission('administrator'),
+    rateLimit({ windowMs: 60000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false }),
+    asyncHandler(async (req, res) => {
+      if (!notifications) throw new Rejected('Varslingstjenesten er ikke tilgjengelig', 503);
+      const body = z
+          .object({ value: z.record(z.string(), z.unknown()), send: z.boolean().default(false) })
+          .strict()
+          .parse(req.body),
+        settings = notifications.prepare(body.value);
+      res.json(
+        body.send
+          ? await notifications.test(settings, req.session.principal.sid)
+          : await notifications.verify({ ...settings, enabled: true }),
+      );
+    }),
+  );
   app.get('/api/readiness', permission('administrator'), (_req, res) => res.json(readiness(store, config)));
   app.post('/api/readiness/evidence', permission('administrator'), (req, res) => {
     const evidence = z
@@ -321,7 +375,8 @@ export function controlApp({
     asyncHandler(async (req, res) => {
       const stationId = id.parse(req.params.stationId);
       store.current(`station:${stationId}`);
-      const target = databaseSchema.parse(req.body);
+      const {password,...values}=req.body;
+      const target = databaseSchema.parse({...values,...(password&&databaseWriter?{passwordSecret:databaseWriter.savePassword(password,req.session.principal.sid)}:{})});
       if (target.stationId !== stationId) throw new Rejected('Feil stasjonsidentitet', 400);
       if (!databaseWriter) throw new Rejected('Databasetjenesten er ikke tilgjengelig', 503);
       const report = await databaseWriter.probe(target);
@@ -341,7 +396,7 @@ export function controlApp({
       pending = true;
       try {
         await sessions.read(req, false, { touch: false });
-        res.write(`data: ${JSON.stringify(snapshot(store))}\n\n`);
+        res.write(`data: ${JSON.stringify(adminSnapshot(store))}\n\n`);
       } catch {
         res.end();
       } finally {
@@ -394,12 +449,17 @@ export function controlApp({
       })
       .strict()
       .parse(req.body);
-    if (scope === 'gateway' || scope.startsWith('database:'))
+    if (scope === 'gateway' || scope === 'notifications' || scope.startsWith('database:'))
       requireRole(req.session.principal, 'administrator');
     if (scope.startsWith('firmware:')) throw new Rejected('Velg en signert utgivelse under Firmware', 400);
     if (scope.startsWith('database:')) store.current(`station:${scope.slice(9)}`);
     if (scope.startsWith('alarms:')) store.current(`station:${scope.slice(7)}`);
-    res.status(201).json(store.propose(scope, value, revision, req.session.principal.sid));
+    let candidate=value;
+    if(scope.startsWith('database:')&&Object.hasOwn(value,'password')){
+      if(!databaseWriter)throw new Rejected('Databasetjenesten er ikke tilgjengelig',503);
+      const {password,...rest}=value;candidate={...rest,...(password?{passwordSecret:databaseWriter.savePassword(password,req.session.principal.sid)}:{})};
+    }
+    res.status(201).json(store.propose(scope, candidate, revision, req.session.principal.sid));
   });
   app.post(
     '/api/changes/:changeId/:action',
@@ -410,6 +470,7 @@ export function controlApp({
         actor = req.session.principal.sid;
       if (
         change.scope === 'gateway' ||
+        change.scope === 'notifications' ||
         change.scope.startsWith('database:') ||
         change.scope.startsWith('firmware:')
       )
@@ -418,7 +479,7 @@ export function controlApp({
         const report =
           change.scope.startsWith('device:') || change.scope.startsWith('firmware:')
             ? null
-            : await probe(store, directory, change, req.session.principal, databaseWriter);
+            : await probe(store, directory, change, req.session.principal, databaseWriter, notifications);
         store.begin(changeId, actor);
         if (report) store.health(changeId, true, report);
       } else if (req.params.action === 'confirm') {
@@ -429,7 +490,14 @@ export function controlApp({
             req.hostname !== new URL(change.candidate.adminOrigin).hostname)
         )
           throw new Rejected('Åpne den nye adminadressen og bekreft derfra før fristen utløper');
-        const report = await probe(store, directory, change, req.session.principal, databaseWriter);
+        const report = await probe(
+          store,
+          directory,
+          change,
+          req.session.principal,
+          databaseWriter,
+          notifications,
+        );
         if (!change.scope.startsWith('device:') && !change.scope.startsWith('firmware:'))
           store.health(changeId, true, report);
         store.confirm(changeId, actor);
@@ -473,7 +541,7 @@ export function controlApp({
     res.json(firmwareBuilds.cancel(req.params.buildId, req.session.principal.sid)),
   );
   app.post('/api/firmware-builds/:buildId/usb-complete', (req, res) =>
-    res.json(firmwareBuilds.usbComplete(req.params.buildId, req.session.principal.sid)),
+    res.json(firmwareBuilds.usbComplete(req.params.buildId, req.session.principal.sid,z.object({bootConfirmed:z.boolean().default(false)}).strict().parse(req.body))),
   );
   app.post('/api/devices/:stationId/restart', permission('operator'), (req, res) => {
     const stationId = id.parse(req.params.stationId),

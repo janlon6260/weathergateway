@@ -88,12 +88,17 @@ export class FirmwareBuilds {
       cipher = createCipheriv('aes-256-gcm', this.key(), nonce);
     cipher.setAAD(Buffer.from(`${this.store.environment}:${stationId}`));
     const body = Buffer.concat([cipher.update(JSON.stringify(identity)), cipher.final()]);
-    atomic(this.vaultPath(stationId), Buffer.concat([nonce, cipher.getAuthTag(), body]).toString('base64'));
+    this.store.db.prepare('INSERT INTO settings_secrets VALUES (?,?) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload').run(`firmware:${stationId}`,Buffer.concat([nonce,cipher.getAuthTag(),body]).toString('base64'));
   }
   identity(stationId) {
     const path = this.vaultPath(stationId);
-    if (!existsSync(path)) return null;
-    const data = Buffer.from(readFileSync(path, 'utf8'), 'base64'),
+    let row=this.store.db.prepare('SELECT payload FROM settings_secrets WHERE name=?').get(`firmware:${stationId}`);
+    if(!row&&existsSync(path)){
+      this.store.db.prepare('INSERT INTO settings_secrets VALUES (?,?)').run(`firmware:${stationId}`,readFileSync(path,'utf8'));
+      row=this.store.db.prepare('SELECT payload FROM settings_secrets WHERE name=?').get(`firmware:${stationId}`);
+    }
+    if(!row)return null;
+    const data = Buffer.from(row.payload, 'base64'),
       cipher = createDecipheriv('aes-256-gcm', this.key(false), data.subarray(0, 12));
     cipher.setAAD(Buffer.from(`${this.store.environment}:${stationId}`));
     cipher.setAuthTag(data.subarray(12, 28));
@@ -519,7 +524,7 @@ export class FirmwareBuilds {
       join(this.store.stationDirectory(row.station_id, 'firmware'), `${row.id}.usb-flash.json`),
     );
   }
-  usbComplete(buildId, actor) {
+  usbComplete(buildId, actor, {bootConfirmed=false}={}) {
     const row = this.row(buildId);
     this.usb(buildId);
     const p = JSON.parse(row.payload);
@@ -547,6 +552,7 @@ export class FirmwareBuilds {
           );
         this.store.audit(actor, 'usb_firmware_installed', {
           buildId,
+          bootConfirmed,
           stationId: row.station_id,
           releaseId: row.release_id,
         });
