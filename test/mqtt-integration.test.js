@@ -17,6 +17,8 @@ import { mqttSubjectAltNames } from '../server/tls-identities.js';
 import { logSession, readDeviceLogs } from '../server/device-logs.js';
 import { deviceProfile } from '../shared/device-hardware.js';
 import { deviceSchema } from '../server/schema.js';
+import { crcCcitt } from '../server/davis.js';
+import { adminSnapshot } from '../server/admin-live.js';
 
 const binary = process.env.WG_MOSQUITTO_BIN;
 const deadline = (promise, ms = 8000) => {
@@ -30,7 +32,7 @@ const deadline = (promise, ms = 8000) => {
 };
 test(
   'real MQTT 5/mTLS broker isolates stations, validates IP SAN and requires a gateway receipt after durable storage',
-  { skip: !binary, timeout: 40000 },
+  { skip: !binary, timeout: 60000 },
   async () => {
     const root = mkdtempSync(join(tmpdir(), 'wg-mqtt-integration-')),
       ca = join(root, 'ca.pem'),
@@ -312,6 +314,28 @@ test(
         store.db.prepare('SELECT COUNT(*) AS n FROM observations WHERE station_id=?').get(second.stationId).n,
         1,
       );
+      // Real 2.5-second radio cadence through mTLS, application receipts and
+      // the admin read model. Include all five RF channels and changing wind.
+      const stationKey = store.current(`station:${first.stationId}`).value.key;
+      for (let n = 0; n < 8; n++) {
+        if (n) await new Promise((resolve) => setTimeout(resolve, 2500));
+        const packet = Buffer.from('8004700f99009111ffff', 'hex');
+        packet[1] = 4 + n;
+        packet.writeUInt16BE(crcCcitt(packet.subarray(0, 6)), 6);
+        const sample = observation(first.stationId, Date.now(), {
+          sequence: 10 + n,
+          measurements: {},
+          firmware: 'wg-esp32-2.4.2',
+          source: { protocol: 'davis-iss', packet: packet.toString('base64'), channel: n % 5, rssiDbm: -63 },
+        });
+        const delivered = waitMessage(a, `${topic}/telemetry-receipt`);
+        await a.publishAsync(`${topic}/telemetry`, JSON.stringify(sample), { qos: 1 });
+        assert.equal((await deadline(delivered, 2500)).status, 'stored');
+        const display = adminSnapshot(store)[stationKey];
+        assert.equal(display.lastValidTime, sample.observedAt);
+        assert.ok(Math.abs(display.wlatest - (4 + n) * 0.44704) < 1e-6);
+        assert.equal(display.status, 'green');
+      }
     } catch (error) {
       error.message += `\nBroker diagnostic: ${logs}`;
       throw error;

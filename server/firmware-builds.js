@@ -385,9 +385,17 @@ export class FirmwareBuilds {
       };
       this.store.db
         .prepare(
-          'INSERT INTO firmware_builds(id,station_id,state,created_at,updated_at,payload) VALUES (?,?,?,?,?,?)',
+          'INSERT INTO firmware_builds(id,station_id,state,created_at,updated_at,payload,log) VALUES (?,?,?,?,?,?,?)',
         )
-        .run(buildId, stationId, 'queued', this.store.clock(), this.store.clock(), JSON.stringify(payload));
+        .run(
+          buildId,
+          stationId,
+          'queued',
+          this.store.clock(),
+          this.store.clock(),
+          JSON.stringify(payload),
+          '',
+        );
       atomic(join(directory, 'request.json'), {
         format: 1,
         environment: this.store.environment,

@@ -1,21 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, join, dirname, relative } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import mysql from 'mysql2/promise';
 import { Store } from '../server/store.js';
 import { configuration, initialize } from '../server/bootstrap.js';
-import { observation } from './helpers.js';
+import { observation, directory } from './helpers.js';
 import { ingest } from '../server/observations.js';
 import { startBackup, finishBackups } from '../server/backups.js';
 import Database from 'better-sqlite3';
 import { ApiClients } from '../server/api-clients.js';
+import request from 'supertest';
+import { CertificateManager } from '../server/certificates.js';
+import { CertificateIssuer } from '../server/pki.js';
+import { FirmwareBuilds } from '../server/firmware-builds.js';
+import { controlApp } from '../server/app.js';
 test(
   'real MariaDB is authoritative for settings, changes, audit and secrets; weather remains separate and rollback/restart retain state',
   { skip: !process.env.WG_MARIADB_BIN, timeout: 90000 },
-  async () => {
+  async (t) => {
     const base = resolve('artifacts');
     mkdirSync(base, { recursive: true });
     const root = mkdtempSync(join(base, 'config-mariadb-')),
@@ -83,6 +88,81 @@ test(
       });
       initialize(store, cfg.defaults);
       assert.equal(store.db.backend, 'mariadb');
+      await t.test(
+        'firmware HTTP request queues and updates a build against the existing MariaDB schema without a log default',
+        async () => {
+          const buildConfig = configuration({
+            WG_ENVIRONMENT: 'development',
+            WG_ALLOW_LOCAL_HTTP: 'true',
+            WG_DATA_ROOT: store.root,
+            WG_CERTIFICATE_ROOT: join(root, 'certificates'),
+          });
+          const manager = new CertificateManager({ store, config: buildConfig });
+          await manager.initialize(
+            {
+              caValidity: { amount: 2, unit: 'years' },
+              validity: { amount: 1, unit: 'years' },
+              names: ['gateway.invalid'],
+            },
+            'test',
+          );
+          const certificates = new CertificateIssuer({
+            store,
+            keyFile: buildConfig.issuerKeyFile,
+            caFile: buildConfig.issuerCaFile,
+          });
+          const builds = new FirmwareBuilds({
+            store,
+            config: buildConfig,
+            certificates,
+            certificateManager: manager,
+          });
+          writeFileSync(
+            join(builds.root, 'worker.json'),
+            JSON.stringify({ at: Date.now(), environment: store.environment }),
+          );
+          // Reproduce already-created production schemas; no migration may be
+          // required for the corrected application insert to work.
+          await admin.query(
+            'ALTER TABLE weathergateway_test.firmware_builds MODIFY COLUMN log LONGTEXT NOT NULL',
+          );
+          const agent = request.agent(
+            controlApp({ store, config: buildConfig, directory: directory(), firmwareBuilds: builds }).app,
+          );
+          const login = await agent
+            .post('/api/login')
+            .set('Origin', cfg.defaults.adminOrigin)
+            .send({ username: 'test', password: 'valid-test-password' })
+            .expect(200);
+          const queued = await agent
+            .post(`/api/firmware-builds/stations/${id}`)
+            .set('Origin', cfg.defaults.adminOrigin)
+            .set('X-CSRF-Token', login.body.csrf)
+            .send({
+              mqttHost: 'gateway.invalid',
+              mqttPort: 8883,
+              ssid: 'SQL-regression',
+              wifiPassword: 'local-regression-only',
+              purpose: 'usb',
+            })
+            .expect(202);
+          const buildId = queued.body.id;
+          assert.equal(queued.body.state, 'queued');
+          assert.equal(builds.row(buildId).log, '');
+          assert.equal(store.db.local.prepare('SELECT COUNT(*) AS n FROM firmware_builds').get().n, 0);
+          assert.equal(existsSync(join(builds.root, buildId, 'request.json')), true);
+          writeFileSync(
+            join(builds.root, buildId, 'progress.json'),
+            JSON.stringify({ log: 'Compiler started' }),
+          );
+          builds.poll();
+          assert.equal(builds.row(buildId).state, 'building');
+          assert.equal(builds.row(buildId).log, 'Compiler started');
+          builds.cancel(buildId, 'test');
+          assert.equal(builds.row(buildId).state, 'failed');
+          assert.equal(existsSync(join(builds.root, buildId, 'request.json')), false);
+        },
+      );
       const apiClients = new ApiClients(store, {
         ...cfg,
         publicAccessFile: join(root, 'policies', 'socket-clients.json'),

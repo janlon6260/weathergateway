@@ -41,12 +41,36 @@ export const deviceHealthSchema = z
       .optional(),
     wifiReconnects: counter,
     mqttReconnects: counter,
+    mqttInputDropped: counter,
     packetsReceived: counter,
     lastIssPacketAgeMs: counter,
     bootCount: counter,
     cpuFrequencyMhz: counter,
     sensorContact: z.boolean().optional(),
     wifiChannel: z.number().int().min(1).max(14).optional(),
+    radio: z
+      .object({
+        state: z.enum(['unavailable', 'scanning', 'tracking']),
+        transmitterId: z.number().int().min(1).max(8),
+        channel: z.number().int().min(1).max(5),
+        lastReceivedChannel: z.number().int().min(1).max(5).optional(),
+        rssiDbm: z.number().int().min(-127).max(0).optional(),
+        packetsReceived: counter,
+        crcErrors: counter,
+        foreignPackets: counter,
+        repeaterPackets: counter,
+        fifoOverruns: counter,
+        missedPackets: counter,
+        resyncs: counter,
+        spiErrors: counter,
+        stalePackets: counter,
+        maxPollGapMs: counter,
+        queuedPackets: counter,
+        queueDropped: counter,
+        lastPacketAgeMs: counter,
+      })
+      .strict()
+      .optional(),
     rs485: z
       .object({
         protocol: z.literal('davis-iss-rs485-v1'),
@@ -91,6 +115,10 @@ export function recordDeviceHealth(store, stationId, input, { retained = false }
     ...body,
     lastContactAt: body.online ? store.clock() : old.lastContactAt || previous?.received_at || null,
   };
+  // A live profile change must not keep diagnostics from the previous receiver.
+  // LWT still preserves the last reported health for troubleshooting.
+  if (body.online && body.radio) delete value.rs485;
+  if (body.online && body.rs485) delete value.radio;
   store.db
     .prepare('INSERT OR REPLACE INTO device_status VALUES (?,?,?)')
     .run(stationId, store.clock(), JSON.stringify(value));

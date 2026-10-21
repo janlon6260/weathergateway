@@ -4,7 +4,7 @@ import { setup, observation } from './helpers.js';
 import { ingest } from '../server/observations.js';
 import { adminSnapshot } from '../server/admin-live.js';
 import { dataStatus, freshnessThresholds } from '../shared/freshness.js';
-import { recordDeviceHealth } from '../server/device-health.js';
+import { recordDeviceHealth, deviceHealthSchema } from '../server/device-health.js';
 test('admin retains last good values through outages, partial measurements and restart-independent reads with global/per-station ages', (t) => {
   const s = setup(t),
     station = s.store.stationList()[0].value;
@@ -52,6 +52,52 @@ test('admin retains last good values through outages, partial measurements and r
     }),
     'green',
   );
+});
+
+test('radio diagnostics persist with separate ISS and Wi-Fi signals and reject invalid channel/counter values', (t) => {
+  const s = setup(t),
+    station = s.store.stationList()[0].value;
+  const radio = {
+    state: 'tracking',
+    transmitterId: 1,
+    channel: 5,
+    lastReceivedChannel: 4,
+    rssiDbm: -63,
+    packetsReceived: 480,
+    missedPackets: 2,
+    crcErrors: 1,
+    fifoOverruns: 0,
+    spiErrors: 0,
+    foreignPackets: 8,
+    repeaterPackets: 0,
+    resyncs: 0,
+    stalePackets: 0,
+    maxPollGapMs: 8,
+    queuedPackets: 0,
+    queueDropped: 0,
+    lastPacketAgeMs: 180,
+  };
+  recordDeviceHealth(s.store, station.id, { online: true, wifiRssiDbm: -45, mqttInputDropped: 0, radio });
+  const health = JSON.parse(
+    s.store.db.prepare('SELECT payload FROM device_status WHERE station_id=?').get(station.id).payload,
+  );
+  assert.deepEqual(health.radio, radio);
+  assert.equal(health.wifiRssiDbm, -45);
+  assert.equal(health.mqttInputDropped, 0);
+  for (const invalid of [{ channel: 6 }, { transmitterId: 0 }, { crcErrors: -1 }, { state: 'ready' }])
+    assert.equal(
+      deviceHealthSchema.safeParse({ online: true, radio: { ...radio, ...invalid } }).success,
+      false,
+    );
+  recordDeviceHealth(s.store, station.id, {
+    online: true,
+    rs485: { protocol: 'davis-iss-rs485-v1', checksum: 'none', baud: 4800, framesReceived: 3 },
+  });
+  const switched = JSON.parse(
+    s.store.db.prepare('SELECT payload FROM device_status WHERE station_id=?').get(station.id).payload,
+  );
+  assert.equal(switched.radio, undefined);
+  assert.equal(switched.rs485.framesReceived, 3);
 });
 test('device health ignores stale retained online packets and replayed heartbeats, preserves last health on LWT and records new boot', (t) => {
   const s = setup(t),

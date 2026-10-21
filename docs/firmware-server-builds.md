@@ -69,3 +69,9 @@ Serverbygg dekker foreløpig standardprofilen for ESP-WROOM-32/4 MB/RFM69HCW EU8
 SDK-oppsettet følger [Espressifs dokumentasjon for ESP-IDF Docker](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32/api-guides/tools/idf-docker-image.html). Den lokale containerflyten legger til isolerte mapper, frakoblet kjøretid og kontrollserverens signering.
 
 Ved oppgradering må også prepare kjøre fra det nye app-imaget. Det gamle egendefinerte firmware-builder-imaget brukes ikke av de nye stackene.
+
+## HTTP 500 / ER_NO_DEFAULT_FOR_FIELD ved byggstart
+
+Eldre app-versjoner utelot `firmware_builds.log` ved oppretting av en jobb. MariaDB-tabellen kan ha dette som `LONGTEXT NOT NULL` uten standardverdi, slik at forespørselen feiler før kompilatoren starter. Rettelsen setter tom bygglogg eksplisitt og fungerer med den eksisterende tabellen. Ta i bruk det oppdaterte app-imaget og redeploy control-tjenesten; ingen manuell skjemaendring er nødvendig.
+
+Regresjonstesten bruker det faktiske HTTP-endepunktet mot en isolert MariaDB med nettopp dette skjemaet, og kontrollerer `202 Accepted`, sentral lagring, loggoppdatering og kansellering.

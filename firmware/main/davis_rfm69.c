@@ -22,6 +22,8 @@ static const char *TAG = "davis_radio";
 static int channel_index, missed;
 static int64_t expected_at, scan_at, received_at, retry_at;
 static int64_t interval_us;
+static int64_t last_poll_us;
+static davis_radio_stats_t stats;
 
 static void fault(void) { ready = false; retry_at = esp_timer_get_time() / 1000 + 30000; }
 static bool valid_pin(int pin) {
@@ -33,13 +35,13 @@ static bool valid_pin(int pin) {
 static bool reg_write(uint8_t address, uint8_t value) {
   uint8_t tx[] = {(uint8_t)(address | 0x80), value};
   spi_transaction_t t = {.length = 16, .tx_buffer = tx};
-  if (spi_device_polling_transmit(radio, &t) != ESP_OK) { fault(); return false; }
+  if (spi_device_polling_transmit(radio, &t) != ESP_OK) { stats.spi_errors++; fault(); return false; }
   return true;
 }
 static bool reg_read(uint8_t address, uint8_t *value) {
   uint8_t tx[] = {(uint8_t)(address & 0x7f), 0}, rx[2];
   spi_transaction_t t = {.length = 16, .tx_buffer = tx, .rx_buffer = rx};
-  if (spi_device_polling_transmit(radio, &t) != ESP_OK) { fault(); return false; }
+  if (spi_device_polling_transmit(radio, &t) != ESP_OK) { stats.spi_errors++; fault(); return false; }
   *value = rx[1]; return true;
 }
 static bool standby(void) {
@@ -126,6 +128,7 @@ bool davis_radio_init(const davis_radio_config_t *config) {
   for (unsigned i = 0; i < sizeof(registers) / sizeof(registers[0]); i++)
     if (!reg_write(registers[i][0], registers[i][1])) return init_failed("register configuration", ESP_FAIL);
   ready = true; locked = false; missed = 0; received_at = 0;
+  last_poll_us = esp_timer_get_time();
   // ID 1 has wire ID 0. Timer uses microseconds internally below to retain
   // the exact 62.5 ms increment rather than accumulating rounded periods.
   interval_us = 2500000LL + (pins.transmitter_id - 1) * 62500LL;
@@ -140,45 +143,68 @@ static uint8_t reverse_bits(uint8_t byte) {
   return result;
 }
 static bool valid_frame(const uint8_t packet[10]) {
-  if (packet[8] != 255 || packet[9] != 255 || (packet[0] & 7) != pins.transmitter_id - 1) return false;
   uint16_t crc = 0;
   for (int i = 0; i < 8; i++) {
     crc ^= (uint16_t)packet[i] << 8;
     for (int bit = 0; bit < 8; bit++) crc = (uint16_t)((crc << 1) ^ ((crc & 0x8000) ? 0x1021 : 0));
   }
-  return crc == 0;
+  if (crc) { stats.crc_errors++; return false; }
+  if (packet[8] != 255 || packet[9] != 255) { stats.repeater_packets++; return false; }
+  if ((packet[0] & 7) != pins.transmitter_id - 1) { stats.foreign_packets++; return false; }
+  return true;
 }
 bool davis_radio_failed(int64_t now_ms) { return !ready || received_at == 0 || now_ms - received_at > 15000; }
+void davis_radio_stats(davis_radio_stats_t *out) {
+  *out = stats; out->ready = ready; out->locked = locked;
+  out->transmitter_id = pins.transmitter_id; out->channel = channel_index;
+  out->last_packet_ms = received_at;
+}
 bool davis_radio_poll(int64_t now_ms, uint8_t packet[10], int *channel, int *rssi_dbm) {
   if (!ready) {
     if (now_ms >= retry_at) (void)davis_radio_init(&pins);
     return false;
   }
+  const int64_t now_us = now_ms * 1000;
+  if (last_poll_us && now_us > last_poll_us && (uint64_t)(now_us - last_poll_us) > stats.max_poll_gap_us)
+    stats.max_poll_gap_us = now_us - last_poll_us;
+  last_poll_us = now_us;
   uint8_t flags;
   if (!reg_read(0x28, &flags)) return false;
-  if (flags & 0x10) { // FIFO overrun: discard the whole corrupted frame.
-    (void)receive_on(channel_index); return false;
+  const bool late = locked && now_us > expected_at + 150000;
+  if (flags & 0x10) { // Errors must not starve the scheduled hop below.
+    stats.fifo_overruns++;
+    if (!receive_on(channel_index)) return false;
+  } else if ((flags & 0x04) && late) {
+    // The FIFO can retain a frame while its consumer is stalled. Its read time
+    // is not its RF arrival time; never re-anchor the hop clock to stale data.
+    stats.stale_packets++;
+    if (!receive_on(channel_index)) return false;
   }
-  if ((flags & 0x04) && gpio_get_level(pins.dio0)) {
+  else if (flags & 0x04) {
     uint8_t rssi, tx[11] = {0}, rx[11] = {0};
     if (!reg_read(0x24, &rssi) || !standby()) return false;
     spi_transaction_t t = {.length = sizeof(tx) * 8, .tx_buffer = tx, .rx_buffer = rx};
-    if (spi_device_polling_transmit(radio, &t) != ESP_OK) { fault(); return false; }
+    if (spi_device_polling_transmit(radio, &t) != ESP_OK) { stats.spi_errors++; fault(); return false; }
     for (int i = 0; i < 10; i++) packet[i] = reverse_bits(rx[i + 1]);
     int received_channel = channel_index;
     if (valid_frame(packet)) {
       *channel = received_channel; *rssi_dbm = -(int)rssi / 2;
       received_at = now_ms; expected_at = now_ms * 1000 + interval_us;
+      stats.packets++; stats.last_channel = received_channel; stats.last_rssi_dbm = *rssi_dbm;
       locked = true; missed = 0;
       if (!receive_on(received_channel + 1)) return false;
       return true;
     }
-    (void)receive_on(received_channel);
+    if (!receive_on(received_channel)) return false;
   }
-  if (locked && now_ms * 1000 > expected_at + 150000) {
-    expected_at += interval_us;
-    if (++missed >= 5) { locked = false; scan_at = now_ms + 16000; }
-    (void)receive_on(channel_index + 1);
+  if (late) {
+    // Catch up all elapsed slots in one poll, rather than hopping once per
+    // delayed loop. Retain phase through short RF outages (up to 25 slots).
+    const int64_t slots = (now_us - expected_at - 150000) / interval_us + 1;
+    expected_at += slots * interval_us; stats.missed_packets += slots;
+    if (slots >= 25 - missed) { locked = false; missed = 25; scan_at = now_ms + 16000; stats.resyncs++; }
+    else missed += (int)slots;
+    (void)receive_on(channel_index + (int)(slots % 5));
   } else if (!locked && now_ms >= scan_at) {
     scan_at = now_ms + 16000;
     (void)receive_on(channel_index + 1);

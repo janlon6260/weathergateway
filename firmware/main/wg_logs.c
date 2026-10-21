@@ -74,6 +74,6 @@ void wg_logs_tick(esp_mqtt_client_handle_t client, bool connected) {
   cJSON_AddStringToObject(o, "message", line.message);
   char *json = cJSON_PrintUnformatted(o);
   // Best effort diagnostics never occupy the durable observation outbox.
-  if (json) { if (esp_mqtt_client_publish(client, topic, json, 0, 0, 0) < 0) { portENTER_CRITICAL(&lock); dropped++; portEXIT_CRITICAL(&lock); } free(json); }
+  if (json) { if (esp_mqtt_client_enqueue(client, topic, json, 0, 0, 0, true) < 0) { portENTER_CRITICAL(&lock); dropped++; portEXIT_CRITICAL(&lock); } free(json); }
   cJSON_Delete(o); last_send = now;
 }

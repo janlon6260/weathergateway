@@ -15,6 +15,8 @@ const compiler =
       : null);
 for (const [source, expected] of [
   ['radio-lifecycle.c', 'radio lifecycle'],
+  ['radio-reception.c', 'radio reception'],
+  ['radio-receiver.c', 'radio task'],
   ['mqtt-lifecycle.c', 'MQTT lifecycle'],
   ['config-storage.c', 'OTA configuration storage'],
 ])

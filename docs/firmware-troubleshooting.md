@@ -51,6 +51,10 @@ En eksplisitt gateway-IP må stemme med enhetens konfigurasjon og finnes som IP-
 
 ## RFM69HCW og GPIO14
 
+Ved mottak som stopper etter noen minutter eller lange mellomrom mellom vindoppdateringer: kontroller først firmwareversjonen. Den innsendte loggen fra 21. oktober 2026 viser **2.2.0**, sporadiske gyldige pakker med RSSI −63/−64 dBm, kanal 4/5 og ingen MQTT-frakobling eller voksende flashkø i utdraget. Dette bekrefter sporadisk radiomottak, men avgjør ikke alene årsaken til bortfallet. Kanalbytte er normalt og er ikke en endring av ISS-ID.
+
+Firmware **2.4.2** skiller radiomottak fra nettverksarbeidet og retter hopping ved FIFO-feil/forsinkelse. Oppdater gatewayens image, kompiler et **nytt** stasjonsbygg og installer dette på ESP32. Et gammelt ferdigbygg oppdateres ikke når serverens image endres. Bekreft `WeatherGateway 2.4.2 started` i oppstartsloggen. Se deretter `davis_radio: RX:` og **Enheter → Mer om ESP-helse**: stigende radiopakketeller med voksende flashkø peker mot leveringen; stillestående radiopakketeller med stigende CRC/missed/resync peker mot radiomottaket. `unavailable`/SPI-feil krever kontroll av brikke og kobling. Tellere dokumenterer hendelsene; de erstatter ikke fysisk utprøving.
+
 GPIO14 er standard resetpinne. ESP-IDF 6.1 reserverer GPIO-utganger. Eldre kode konfigurerte resetutgangen på nytt ved hvert mislykket radioforsøk uten å frigjøre reservasjonen. 2.1.1 frigjør GPIO og SPI både ved stopp, delvis initialiseringsfeil og neste forsøk. Den frigjør bare ressurser radiodriveren selv har opprettet. Det er ingen automatisk omkobling av pinner.
 
 En mislykket brikkeidentifikasjon logger faktisk `RegVersion` og pinnene som brukes, og skal normalt lese `0x24`. Feil identifikasjon følges av navngitt initialiseringstrinn og et nytt forsøk etter 30 sekunder. Dersom dette fortsetter med modulen tilkoblet, kontroller 3,3 V, felles jord og ledningene mot den faktiske konfigurasjonen. En korrekt programvareopprydding kan ikke bekrefte fysisk SPI-forbindelse. Følg [koblingsskjemaet](davis-radio.md).
