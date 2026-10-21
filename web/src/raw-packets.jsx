@@ -202,8 +202,9 @@ export function RawPackets({ stations, api, initialStation = '' }) {
                         <strong>Vindretning</strong>
                         Råbyte {packet.rawWindDirectionByte} → dekodet{' '}
                         {number(packet.rawMeasurements.windDirectionDeg)}° → kalibrert fra{' '}
-                        {number(packet.measurements.windDirectionDeg)}° → pil mot{' '}
-                        {number(packet.wind.toDegrees)}°
+                        {number(packet.measurements.windDirectionDeg)}° → pil{' '}
+                        {packet.wind.arrowDirection === 'to' ? 'mot' : 'fra'}{' '}
+                        {number(packet.wind.arrowRotationDegrees)}°
                       </div>
                     )}
                     <div className="table-scroll">

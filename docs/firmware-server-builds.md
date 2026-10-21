@@ -60,6 +60,14 @@ Utvikling krever en egen builder med `WG_ENVIRONMENT: development` og bare `/dev
 
 En jobb er tidsbegrenset, bare én kompilering kjører per miljø, og kontrollserveren validerer stasjons-/miljøidentitet, bygg-UUID, sertifikat, konfigurasjon og segmenter før den signerer. Gamle bygg avvises dersom enhetsinnstillingene siden har blitt endret. Bruk et nytt bygg etter konfigurasjonsendringer. En importert eksisterende identitet må stemme med et gyldig, registrert sertifikat og privatnøkkelen.
 
+## Slette gamle bygg
+
+Under **Enheter → Firmware og flashing** kan administrator velge **Slett bygg** og deretter **Slett bygg og filer**. Dette fjerner byggets jobbfiler, USB-pakke, OTA-bilde og bygglogg. **Eldre bygg** og **Nyere bygg** blar i historikken, 20 bygg per side. Henting av andre sider endrer ikke nettverksfeltene i byggskjemaet.
+
+Pågående bygg, installert firmware og bygg som trengs av en aktiv test eller tilbakeføringskommando kan ikke slettes. Sist rapporterte build-ID fra ESP-en er også beskyttet. Avbrutte kompileringer må avsluttes før sletting; byggeren bekrefter dette med `finished.json` etter at underprosesser og midlertidige nøkler er ryddet. Ved oppgradering må **prepare kjøres fra nytt app-image og firmware-builder startes på nytt** for å laste denne protokollen.
+
+Enhetsidentitet, bekreftede innstillinger og revisjonshistorikk beholdes. Minimal bygg-/utgivelsesmetadata beholdes i MariaDB slik at en slettet utgivelses sekvensnummer ikke gjenbrukes. Slettede bygg tilbys ikke for USB eller OTA. Den delte kompilatorcachen gjenbrukes av nye bygg og slettes ikke sammen med én jobb. Ved en filfeil vises bygget for nytt sletteforsøk, mens installasjon fra det blokkeres. Endepunktet `DELETE /api/firmware-builds/:id` krever administrator, intern tilgang og CSRF.
+
 ## Fysisk verifisering
 
 USB går via Web Serial på datamaskinen som har ESP32 koblet til. Serveren kompilerer, men kan ikke åpne en USB-port på en annen datamaskin uten nettleserens lokale tilgang. Bruk Chrome/Edge over HTTPS eller localhost. OTA krever at enheten allerede er provisjonert og koblet til MQTT. Ingen ny innkommende port åpnes på ESP32.

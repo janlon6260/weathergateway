@@ -6,7 +6,7 @@ Implementert: React-panel med sanntidsliste, LDAPS/roller, stasjons-/enhetsadmin
 
 **Implementasjonen er lokalt verifisert; produksjonsinstallasjon og fysisk maskinvare er ikke godkjent her.** Se [leveransestatus](docs/release-status.md) og [akseptanseprøvene](docs/production-acceptance.md). Identisk oppførsel for alle Weather Display-funksjoner må ikke antas. Manglende trykk gir manglende trykkavhengige beregninger, inkludert referanse-ET.
 
-Vind vises med pil mot den retningen vinden blåser og Beaufort-tall etter pilen. [Socket.IO-grensesnittet](docs/socket-api.md) leverer alle tilgjengelige værfelt, numeriske vinddata og filtrering på navn/ID. Hvert tredjepartssystem må godkjennes under **Tilkoblinger**, med egen nøkkel, stasjonsvalg og tidsbegrenset eller evigvarende godkjenning. Ved oppgradering må eksisterende Sunnmørsvær-lesetoken også godkjennes her før det virker igjen.
+Vindpilen viser nå fra-retningen som standard, med valgbar fra-/mot-visning per stasjon og Beaufort-tall etter pilen. [Socket.IO-grensesnittet](docs/socket-api.md) leverer alle tilgjengelige værfelt, numeriske vinddata og filtrering på navn/ID. Hvert tredjepartssystem må godkjennes under **Tilkoblinger**, med egen nøkkel, stasjonsvalg og tidsbegrenset eller evigvarende godkjenning. Ved oppgradering må eksisterende Sunnmørsvær-lesetoken også godkjennes her før det virker igjen.
 
 **Kablet Vantage Pro2 ISS uten konsoll** støttes med 3,3 V MAX3485 og firmware 2.4.1: native 4800 baud / seksbytesdekoding, værdata, USB/OTA, helse og normal tilbakeføring. Protokollen har ingen kontrollsum på selve kabelen; dette vises som datakvalitet. ESP32–gateway bruker fortsatt mTLS. Se [protokollkilder, strømforsyning og bruk](docs/davis-rs485.md). Fysisk maskinvare er ikke testet her.
 

@@ -300,6 +300,12 @@ export class Store {
         if (c.scope.startsWith('firmware:')) {
           if (
             this.db
+              .prepare("SELECT 1 FROM firmware_builds WHERE release_id=? AND state IN ('deleted','deleting')")
+              .get(c.candidate.releaseId)
+          )
+            fail('Bygget er slettet fra serveren', 404);
+          if (
+            this.db
               .prepare("SELECT 1 FROM changes WHERE scope=? AND state IN ('draft','testing','confirming')")
               .get(`device:${c.candidate.stationId}`)
           )

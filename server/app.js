@@ -557,7 +557,12 @@ export function controlApp({
     next();
   });
   app.get('/api/firmware-builds/stations/:stationId', (req, res) =>
-    res.json(firmwareBuilds.status(req.params.stationId)),
+    res.json(
+      firmwareBuilds.status(
+        req.params.stationId,
+        z.object({ before: z.string().optional() }).strict().parse(req.query).before,
+      ),
+    ),
   );
   app.post(
     '/api/firmware-builds/stations/:stationId',
@@ -575,6 +580,9 @@ export function controlApp({
   );
   app.post('/api/firmware-builds/:buildId/cancel', (req, res) =>
     res.json(firmwareBuilds.cancel(req.params.buildId, req.session.principal.sid)),
+  );
+  app.delete('/api/firmware-builds/:buildId', (req, res) =>
+    res.json(firmwareBuilds.remove(req.params.buildId, req.session.principal.sid)),
   );
   app.post('/api/firmware-builds/:buildId/usb-complete', (req, res) =>
     res.json(

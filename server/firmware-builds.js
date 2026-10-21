@@ -17,8 +17,9 @@ import {
   renameSync,
   unlinkSync,
   lstatSync,
+  rmSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import { deviceSchema, id } from './schema.js';
@@ -191,24 +192,44 @@ export class FirmwareBuilds {
       return false;
     }
   }
-  status(stationId) {
+  status(stationId, before) {
     this.station(stationId);
     this.poll();
     const identity = this.identity(stationId);
+    let cursor;
+    if (before !== undefined) {
+      const parsed = z
+        .string()
+        .regex(/^\d{1,16}:[0-9a-f-]{36}$/)
+        .parse(before)
+        .split(':');
+      cursor = {
+        at: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).parse(parsed[0]),
+        id: id.parse(parsed[1]),
+      };
+    }
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM firmware_builds WHERE station_id=? AND state!='deleted'${cursor ? ' AND (created_at<? OR (created_at=? AND id<?))' : ''} ORDER BY created_at DESC,id DESC LIMIT 21`,
+      )
+      .all(stationId, ...(cursor ? [cursor.at, cursor.at, cursor.id] : []));
+    const protection = this.protection(stationId);
     return {
       available: this.workerReady(),
+      building: !!this.store.db
+        .prepare("SELECT 1 FROM firmware_builds WHERE state IN ('queued','building')")
+        .get(),
       configuration: this.store.confirmedValue(`device:${stationId}`),
       ssid: identity?.ssid || '',
       hasWifiPassword: !!identity?.wifiPassword,
       hasIdentity: !!identity?.privateKey,
-      builds: this.store.db
-        .prepare('SELECT * FROM firmware_builds WHERE station_id=? ORDER BY created_at DESC LIMIT 20')
-        .all(stationId)
-        .map((row) => this.public(row)),
+      builds: rows.slice(0, 20).map((row) => this.public(row, protection)),
+      nextCursor: rows.length > 20 ? `${rows[19].created_at}:${rows[19].id}` : null,
     };
   }
-  public(row) {
+  public(row, protection = this.protection(row.station_id)) {
     const p = JSON.parse(row.payload);
+    const deleteBlockedReason = this.deleteBlockedReason(row, protection);
     return {
       id: row.id,
       stationId: row.station_id,
@@ -223,6 +244,8 @@ export class FirmwareBuilds {
       releaseId: row.release_id,
       error: row.error,
       log: row.log,
+      canDelete: !deleteBlockedReason,
+      deleteBlockedReason,
     };
   }
   row(buildId) {
@@ -590,6 +613,94 @@ export class FirmwareBuilds {
     if (!['queued', 'building'].includes(row.state)) throw new Rejected('Bygget er allerede avsluttet');
     this.fail(row, 'Avbrutt av administrator', join(this.root, row.id));
     this.store.audit(actor, 'firmware_build_cancelled', { buildId, stationId: row.station_id });
+    return { ok: true };
+  }
+  protection(stationId) {
+    const releases = new Set();
+    const firmware = this.store.db
+      .prepare('SELECT payload FROM configuration WHERE scope=?')
+      .get(`firmware:${stationId}`);
+    if (firmware) releases.add(JSON.parse(firmware.payload).releaseId);
+    for (const change of this.store.db
+      .prepare(
+        "SELECT before_json,candidate_json FROM changes WHERE scope=? AND state IN ('draft','testing','confirming')",
+      )
+      .all(`firmware:${stationId}`)) {
+      releases.add(JSON.parse(change.before_json).releaseId);
+      releases.add(JSON.parse(change.candidate_json).releaseId);
+    }
+    for (const command of this.store.db
+      .prepare(
+        "SELECT payload FROM commands WHERE station_id=? AND deadline>? AND kind IN ('test_firmware','commit_firmware','rollback_firmware') AND state IN ('queued','sent','received','testing')",
+      )
+      .all(stationId, this.store.clock()))
+      releases.add(JSON.parse(command.payload).releaseId);
+    releases.add(latest(this.store, stationId)?.firmwareReleaseId);
+    const health = this.store.db
+      .prepare('SELECT payload FROM device_status WHERE station_id=?')
+      .get(stationId);
+    let worker = null;
+    if (this.workerReady()) worker = boundedJson(join(this.root, 'worker.json'), 4096);
+    return { releases, buildId: health ? JSON.parse(health.payload).buildId : null, worker };
+  }
+  deleteBlockedReason(row, protection) {
+    if (['queued', 'building'].includes(row.state))
+      return 'Bygget pågår. Avbryt og vent til byggeren er ferdig.';
+    if (row.id === protection.buildId || (row.release_id && protection.releases.has(row.release_id)))
+      return 'Bygget brukes av ESP-en eller er nødvendig for en aktiv test eller tilbakeføring.';
+    if (row.state === 'deleting') return null;
+    const directory = this.store.safe('system', 'firmware-builds', id.parse(row.id));
+    if (
+      protection.worker &&
+      !existsSync(join(directory, 'finished.json')) &&
+      (!protection.worker.startedAt || protection.worker.startedAt <= row.updated_at)
+    )
+      return 'Byggeren må avslutte jobben før sletting. Start firmware-builder på nytt hvis dette vedvarer.';
+    return null;
+  }
+  remove(buildId, actor) {
+    const row = this.row(buildId);
+    if (row.state === 'deleted') return { ok: true };
+    const reason = this.deleteBlockedReason(row, this.protection(row.station_id));
+    if (reason) throw new Rejected(reason, 409);
+    // Validate every resolved target before recursive deletion. Preserve the
+    // release metadata as a sequence tombstone, plus audit and device identity.
+    const directory = this.store.safe('system', 'firmware-builds', id.parse(row.id));
+    const within = relative(resolve(this.root), resolve(directory));
+    if (!within || within.startsWith('..') || isAbsolute(within))
+      throw new Rejected('Ugyldig byggmappe', 400);
+    const usb = this.store.safe('stations', id.parse(row.station_id), 'firmware', `${row.id}.usb-flash.json`);
+    const image = row.release_id
+      ? this.store.safe('stations', row.station_id, 'firmware', `${id.parse(row.release_id)}.bin`)
+      : null;
+    this.store.db
+      .transaction(() => {
+        const blocked = this.deleteBlockedReason(this.row(buildId), this.protection(row.station_id));
+        if (blocked) throw new Rejected(blocked, 409);
+        this.store.db.prepare("UPDATE firmware_builds SET state='deleting' WHERE id=?").run(buildId);
+      })
+      .immediate();
+    try {
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(usb, { force: true });
+      if (image) rmSync(image, { force: true });
+    } catch (error) {
+      // A retry can finish an interrupted deletion; deploying 'deleting' builds
+      // is blocked even if only some files could be removed.
+      throw new Rejected('Noen byggfiler kunne ikke slettes. Kontroller rettighetene og prøv igjen.', 409);
+    }
+    this.store.db
+      .transaction(() => {
+        this.store.db
+          .prepare("UPDATE firmware_builds SET state='deleted',log='',updated_at=? WHERE id=?")
+          .run(this.store.clock(), buildId);
+        this.store.audit(actor, 'firmware_build_deleted', {
+          buildId,
+          stationId: row.station_id,
+          releaseId: row.release_id,
+        });
+      })
+      .immediate();
     return { ok: true };
   }
 }

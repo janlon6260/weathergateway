@@ -45,7 +45,8 @@ Stasjonsfilter godtar UUID, stasjonsnøkkel eller visningsnavn, med normaliserin
   "speedMs": 6,
   "fromDegrees": 270,
   "toDegrees": 90,
-  "arrowRotationDegrees": 90,
+  "arrowRotationDegrees": 270,
+  "arrowDirection": "from",
   "fromCompass": "V",
   "toCompass": "Ø",
   "beaufort": 4,
@@ -53,7 +54,9 @@ Stasjonsfilter godtar UUID, stasjonsnøkkel eller visningsnavn, med normaliserin
 }
 ```
 
-Nordvendt SVG-pil roteres med klokken. Vind fra vest gir pil mot øst. Beaufort er klassifiseringen av den viste vindhastigheten i m/s; den er ikke merket som et ti-minutters middel. Ved stille vind (Beaufort 0) og manglende vindretning er `toDegrees` og `arrowRotationDegrees` null. Bevar nullverdier og kontroller måletid/kvalitet; ikke erstatt manglende målinger med 0. Skalaen følger [Met Office Beaufort-skala](https://weather.metoffice.gov.uk/guides/coast-and-sea/beaufort-scale).
+Nordvendt SVG-pil roteres med klokken med `arrowRotationDegrees`. Standardvisningen er nå **fra-retningen**, etter eierens ønske om å snu pilen 180°. Vind fra vest gir derfor pil ved 270°. Under **Stasjoner → Endre → Vindretning fra ISS → Pilen viser** kan hver stasjon velge fra-retningen eller mot-retningen. Valget lagres i `windDirection.arrowDirection` (`from` eller `to`) og inngår i utdata som `wind.arrowDirection`. Ved `to` gir vind fra vest pil ved 90°. Bruk `arrowRotationDegrees` for valgt pilvisning i begge Socket.IO-navnerom; `fromDegrees` og `toDegrees` beholder sine fysiske betydninger og endres ikke av visningsvalget.
+
+Beaufort er klassifiseringen av den viste vindhastigheten i m/s; den er ikke merket som et ti-minutters middel. Ved stille vind (Beaufort 0) og manglende vindretning er `toDegrees` og `arrowRotationDegrees` null. Bevar nullverdier og kontroller måletid/kvalitet; ikke erstatt manglende målinger med 0. Skalaen følger [Met Office Beaufort-skala](https://weather.metoffice.gov.uk/guides/coast-and-sea/beaufort-scale).
 
 Følgende forespørsler bruker Socket.IO acknowledgement med `{ok:true,data:...}` eller `{ok:false,error:...}`:
 

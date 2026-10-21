@@ -125,6 +125,7 @@ export const stationSchema = z
         decoder: z.enum(Object.keys(windDirectionProfiles)),
         zero: z.enum(['north', 'missing', 'decode']),
         reverse: z.boolean(),
+        arrowDirection: z.enum(['from', 'to']).default('from'),
         rawStart: z.number().int().min(0).max(255),
         rawEnd: z.number().int().min(0).max(255),
         degreesStart: z.number().min(-360).max(720),

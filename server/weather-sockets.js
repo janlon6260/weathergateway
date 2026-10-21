@@ -7,10 +7,26 @@ import { hash } from './store.js';
 import { windPresentation } from '../shared/wind.js';
 const selection = z.object({ stations: z.array(z.string().min(1).max(100)).max(100).default([]) }).strict();
 export function legacySocketSnapshot(store) {
+  const stations = new Map(
+    store.stationList().map((item) => {
+      const station = store.confirmedValue(item.scope);
+      return [station.key, station];
+    }),
+  );
   return Object.fromEntries(
     Object.entries(snapshot(store)).map(([name, value]) => {
       const numeric = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
-      return [name, { ...value, wind: windPresentation(numeric(value.wlatest), numeric(value.bearing)) }];
+      return [
+        name,
+        {
+          ...value,
+          wind: windPresentation(
+            numeric(value.wlatest),
+            numeric(value.bearing),
+            stations.get(name)?.windDirection?.arrowDirection,
+          ),
+        },
+      ];
     }),
   );
 }
@@ -38,6 +54,7 @@ export function weatherSnapshot(store, access, client, selectors = []) {
         wind: windPresentation(
           body?.sensorContact ? body.measurements?.windSpeedMs : null,
           body?.sensorContact ? body.measurements?.windDirectionDeg : null,
+          s.windDirection?.arrowDirection,
         ),
       };
     }),

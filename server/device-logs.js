@@ -119,11 +119,15 @@ export function readDeviceLogs(store, stationId, after) {
       'SELECT id,received_at,payload FROM device_logs WHERE station_id=? AND id>? AND received_at>=? ORDER BY id LIMIT 200',
     )
     .all(stationId, cursor, store.clock() - 3600000);
-  const session = store.db
-    .prepare(
-      'SELECT s.id,s.expires_at,c.state FROM device_log_sessions s LEFT JOIN commands c ON c.id=s.command_id WHERE s.station_id=?',
-    )
-    .get(stationId);
+  // Runtime log leases live locally; commands are authoritative in MariaDB.
+  // A cross-store JOIN would route both tables to MariaDB and fail there.
+  const lease = store.db.prepare('SELECT * FROM device_log_sessions WHERE station_id=?').get(stationId);
+  const command = lease
+    ? store.db.prepare('SELECT state FROM commands WHERE id=?').get(lease.command_id)
+    : null;
+  const session = lease
+    ? { id: lease.id, expires_at: lease.expires_at, state: command?.state ?? null }
+    : null;
   const status = store.db
     .prepare('SELECT received_at,payload FROM device_status WHERE station_id=?')
     .get(stationId);

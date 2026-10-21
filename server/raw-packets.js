@@ -88,7 +88,11 @@ export function packetView(body, row, station, status = 'accepted') {
       body.iss.rainCounterTips < 128
         ? body.iss.rainCounterTips
         : null,
-    wind: windPresentation(measurements.windSpeedMs, measurements.windDirectionDeg),
+    wind: windPresentation(
+      measurements.windSpeedMs,
+      measurements.windDirectionDeg,
+      station.windDirection?.arrowDirection,
+    ),
   };
 }
 export function recentPackets(store, stationId) {

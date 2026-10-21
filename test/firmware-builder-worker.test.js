@@ -83,6 +83,7 @@ for (const cancelled of [false, true])
         await until(() => !existsSync(join(work, 'project/main/device.key')));
         await sleep(4500);
         assert.equal(existsSync(marker), false, 'Compiler descendants must not survive cancellation');
+        assert.equal(existsSync(join(job, 'finished.json')), true);
       } else {
         await until(() => existsSync(join(job, 'result.json')));
         const log = JSON.parse(readFileSync(join(job, 'progress.json'), 'utf8')).log;

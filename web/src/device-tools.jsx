@@ -216,6 +216,7 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
             <label>
               Loggkilde
               <select
+                aria-label="Loggkilde"
                 value={source}
                 disabled={busy || network || mode !== 'disconnected'}
                 onChange={(e) => {
@@ -238,6 +239,13 @@ export function DeviceTools({ stations, environment, admin, api, initialStationI
         {admin && stationId && activeTool === 'firmware' && (
           <FirmwareBuilder
             key={`${environment}:${stationId}`}
+            onDeleted={(buildId) => {
+              if (serverBuildId === buildId) {
+                setBundle(null);
+                setServerBuildId(null);
+                setChecked(false);
+              }
+            }}
             stationId={stationId}
             api={api}
             busy={busy}

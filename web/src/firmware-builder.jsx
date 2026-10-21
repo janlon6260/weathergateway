@@ -6,12 +6,17 @@ const states = {
   building: 'Kompilerer',
   ready: 'Ferdig og signert',
   failed: 'Mislyktes',
+  deleting: 'Slettingen må fullføres',
 };
-export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDeploy }) {
+export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDeploy, onDeleted }) {
   const [status, setStatus] = useState(null),
     [error, setError] = useState(''),
     [pending, setPending] = useState(false);
   const [notice, setNotice] = useState('');
+  const [cursor, setCursor] = useState(null),
+    [newerPages, setNewerPages] = useState([]),
+    [deleteId, setDeleteId] = useState(null),
+    [pageLoading, setPageLoading] = useState(false);
   const [form, setForm] = useState({
     mqttHost: '',
     mqttPort: 8883,
@@ -27,12 +32,19 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
     setStatus(null);
     setError('');
     initialized.current = false;
+    setCursor(null);
+    setNewerPages([]);
+    setDeleteId(null);
+  }, [stationId]);
+  useEffect(() => {
     if (!stationId) return;
     let stopped = false,
       timer;
     const poll = async () => {
       try {
-        const next = await apiRef.current(`/firmware-builds/stations/${stationId}`);
+        const next = await apiRef.current(
+          `/firmware-builds/stations/${stationId}${cursor ? `?before=${encodeURIComponent(cursor)}` : ''}`,
+        );
         if (stopped) return;
         setStatus(next);
         if (!initialized.current) {
@@ -49,15 +61,22 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
         }
       } catch (e) {
         if (!stopped) setError(e.message);
+      } finally {
+        if (!stopped) setPageLoading(false);
       }
       if (!stopped) timer = setTimeout(poll, 3000);
     };
+    setPageLoading(true);
     void poll();
     return () => {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [stationId]);
+  }, [stationId, cursor]);
+  const refresh = () =>
+    apiRef.current(
+      `/firmware-builds/stations/${stationId}${cursor ? `?before=${encodeURIComponent(cursor)}` : ''}`,
+    );
   async function run(action) {
     setPending(true);
     setError('');
@@ -74,7 +93,7 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
     value: form[key],
     onChange: (e) => setForm((old) => ({ ...old, [key]: e.target.value })),
   });
-  const building = status?.builds.some((b) => ['queued', 'building'].includes(b.state));
+  const building = status?.building || status?.builds.some((b) => ['queued', 'building'].includes(b.state));
   return (
     <div className="usb-flash-box firmware-builder">
       <h3>Bygg firmware på serveren</h3>
@@ -110,6 +129,8 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
               configuration: form.configuration,
             });
             setForm((old) => ({ ...old, wifiPassword: '' }));
+            setCursor(null);
+            setNewerPages([]);
             setStatus(await api(`/firmware-builds/stations/${stationId}`));
           });
         }}
@@ -227,15 +248,77 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
             </div>
           )}
           {build.log && (
-            <details open={['building', 'failed'].includes(build.state)}>
+            <details open={build.state === 'building'}>
               <summary>Bygglogg</summary>
               <pre className="device-terminal" aria-label="Firmware bygglogg">
                 {build.log}
               </pre>
             </details>
           )}
+          {!['queued', 'building'].includes(build.state) && (
+            <div className="build-delete">
+              {deleteId === build.id ? (
+                <>
+                  <p>Slette dette bygget og tilhørende serverfiler?</p>
+                  <div className="actions">
+                    <button
+                      className="danger"
+                      disabled={busy || pending}
+                      onClick={() =>
+                        run(async () => {
+                          await api(`/firmware-builds/${build.id}`, undefined, 'DELETE');
+                          onDeleted?.(build.id);
+                          setDeleteId(null);
+                          setStatus(await refresh());
+                          setNotice('Bygget og tilhørende serverfiler er slettet.');
+                        })
+                      }
+                    >
+                      Slett bygg og filer
+                    </button>
+                    <button disabled={busy || pending} onClick={() => setDeleteId(null)}>
+                      Behold bygget
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <button
+                  disabled={busy || pending || !build.canDelete}
+                  title={build.deleteBlockedReason || ''}
+                  onClick={() => setDeleteId(build.id)}
+                >
+                  Slett bygg
+                </button>
+              )}
+              {build.deleteBlockedReason && <p className="muted small">{build.deleteBlockedReason}</p>}
+            </div>
+          )}
         </div>
       ))}
+      {(cursor || status?.nextCursor) && (
+        <div className="actions">
+          <button
+            disabled={busy || pending || pageLoading || !newerPages.length}
+            onClick={() => {
+              setCursor(newerPages.at(-1));
+              setNewerPages((pages) => pages.slice(0, -1));
+              setDeleteId(null);
+            }}
+          >
+            Nyere bygg
+          </button>
+          <button
+            disabled={busy || pending || pageLoading || !status?.nextCursor}
+            onClick={() => {
+              setNewerPages((pages) => [...pages, cursor]);
+              setCursor(status.nextCursor);
+              setDeleteId(null);
+            }}
+          >
+            Eldre bygg
+          </button>
+        </div>
+      )}
       <details>
         <summary>Importer eksisterende enhetsidentitet</summary>
         <p>

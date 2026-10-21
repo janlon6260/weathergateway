@@ -2,6 +2,7 @@ export const windDirectionDefaults = {
   decoder: 'model',
   zero: 'north',
   reverse: false,
+  arrowDirection: 'from',
   rawStart: 0,
   rawEnd: 255,
   degreesStart: 0,

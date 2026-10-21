@@ -38,7 +38,7 @@ export function StationDetails({ station, gateway, data = {}, now, onPackets }) 
     disabled: 'Deaktivert',
   };
   const packet = data.lastPacket;
-  const wind = windPresentation(data.wlatest, data.bearing);
+  const wind = windPresentation(data.wlatest, data.bearing, data.wind?.arrowDirection);
   return (
     <div className="station-details">
       <p className="eyebrow">MÅLEDETALJER</p>
@@ -83,8 +83,8 @@ export function StationDetails({ station, gateway, data = {}, now, onPackets }) 
         </div>
       </div>
       <p>
-        Vindretning lagres som retningen vinden kommer <strong>fra</strong>. Pilen viser hvor vinden blåser{' '}
-        <strong>mot</strong>.
+        Vindretning lagres som retningen vinden kommer <strong>fra</strong>. Pilen viser{' '}
+        <strong>{wind.arrowDirection === 'to' ? 'hvor vinden blåser mot' : 'hvor vinden kommer fra'}</strong>.
       </p>
       {wind.fromDegrees !== null && (
         <p className="wind-detail">

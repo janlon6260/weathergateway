@@ -8,15 +8,16 @@ import { CertificateManager } from '../server/certificates.js';
 import { CertificateIssuer } from '../server/pki.js';
 import { FirmwareBuilds } from '../server/firmware-builds.js';
 import { hash } from '../server/store.js';
-import { X509Certificate } from 'node:crypto';
+import { X509Certificate, randomUUID } from 'node:crypto';
 import { verifyUsbFirmware } from '../server/usb-firmware.js';
 import { prepareUsbBundle } from '../web/src/device-serial.js';
-import { proposeFirmware } from '../server/firmware-updates.js';
+import { proposeFirmware, firmwareReleases } from '../server/firmware-updates.js';
 import { handleAck, firmwareHealth } from '../server/worker.js';
 import { ingest } from '../server/observations.js';
 import { controlApp } from '../server/app.js';
 import { deviceProfile } from '../shared/device-hardware.js';
 import { readiness } from '../server/readiness.js';
+import { recordDeviceHealth } from '../server/device-health.js';
 
 async function fixture(t) {
   const s = setup(t),
@@ -50,7 +51,7 @@ async function fixture(t) {
   });
   writeFileSync(
     join(builds.root, 'worker.json'),
-    JSON.stringify({ at: Date.now(), environment: s.store.environment }),
+    JSON.stringify({ at: Date.now(), startedAt: s.now() - 1000, environment: s.store.environment }),
   );
   return { ...s, builds, certificates, manager, stationId: s.store.stationList()[0].value.id };
 }
@@ -112,8 +113,134 @@ function result(s, build) {
     }),
   );
   s.builds.poll();
+  writeFileSync(join(s.builds.root, build.id, 'finished.json'), JSON.stringify({ at: Date.now() }));
   return s.builds.row(build.id);
 }
+
+test('administrator deletes old build artifacts while preserving audit, device identity and release sequence tombstones', async (t) => {
+  const s = await fixture(t),
+    build = await s.builds.start(s.stationId, input, 'admin'),
+    ready = result(s, build);
+  const identity = s.builds.identity(s.stationId),
+    configuration = s.store.confirmedValue(`device:${s.stationId}`);
+  const sequence = JSON.parse(
+    s.store.db.prepare('SELECT manifest FROM firmware_releases WHERE id=?').get(ready.release_id).manifest,
+  ).sequence;
+  const { app } = controlApp({
+    store: s.store,
+    config: s.config,
+    directory: directory(),
+    firmwareBuilds: s.builds,
+  });
+  const agent = request.agent(app);
+  const logged = await agent
+    .post('/api/login')
+    .set('Origin', s.config.defaults.adminOrigin)
+    .send({ username: 'test', password: 'valid-test-password' })
+    .expect(200);
+  await agent
+    .delete(`/api/firmware-builds/${build.id}`)
+    .set('Origin', s.config.defaults.adminOrigin)
+    .expect(403);
+  assert.equal(s.builds.status(s.stationId).builds[0].canDelete, true);
+  await agent
+    .delete(`/api/firmware-builds/${build.id}`)
+    .set('Origin', s.config.defaults.adminOrigin)
+    .set('X-CSRF-Token', logged.body.csrf)
+    .expect(200);
+  assert.equal(s.builds.row(build.id).state, 'deleted');
+  assert.equal(s.builds.status(s.stationId).builds.length, 0);
+  assert.equal(existsSync(join(s.builds.root, build.id)), false);
+  assert.equal(
+    existsSync(s.store.safe('stations', s.stationId, 'firmware', `${build.id}.usb-flash.json`)),
+    false,
+  );
+  assert.equal(
+    existsSync(s.store.safe('stations', s.stationId, 'firmware', `${ready.release_id}.bin`)),
+    false,
+  );
+  assert.deepEqual(s.builds.identity(s.stationId), identity);
+  assert.deepEqual(s.store.confirmedValue(`device:${s.stationId}`), configuration);
+  assert.ok(s.store.events().some((e) => e.action === 'firmware_build_deleted'));
+  assert.equal(
+    firmwareReleases(s.store).some((r) => r.id === ready.release_id),
+    false,
+  );
+  assert.throws(() => proposeFirmware(s.store, ready.release_id, 'admin'), /slettet/);
+  const firmwareScope = `firmware:${s.stationId}`;
+  s.store.initialize(firmwareScope, { stationId: s.stationId, releaseId: null });
+  const stale = s.store.propose(
+    firmwareScope,
+    { stationId: s.stationId, releaseId: ready.release_id },
+    s.store.current(firmwareScope).revision,
+    'admin',
+  );
+  assert.throws(
+    () => s.store.begin(stale.id, 'admin'),
+    /slettet/,
+    'direct change requests must not deploy deleted artifacts',
+  );
+  assert.equal(s.store.getChange(stale.id).state, 'draft');
+  s.store.rollback(stale.id);
+  assert.throws(() => s.builds.usb(build.id), /ikke ferdig/);
+  const next = await s.builds.start(s.stationId, input, 'admin');
+  const nextReady = result(s, next);
+  const nextSequence = JSON.parse(
+    s.store.db.prepare('SELECT manifest FROM firmware_releases WHERE id=?').get(nextReady.release_id)
+      .manifest,
+  ).sequence;
+  assert.ok(nextSequence > sequence, 'deleted release sequences must never be reused');
+});
+
+test('build deletion protects installed images, active trials, rollback references, known ESP builds and unfinished compiler jobs', async (t) => {
+  const s = await fixture(t),
+    initial = await s.builds.start(s.stationId, input, 'admin');
+  assert.throws(() => s.builds.remove(initial.id, 'admin'), /pågår/);
+  const ready = result(s, initial);
+  s.builds.usbComplete(initial.id, 'admin');
+  assert.throws(() => s.builds.remove(initial.id, 'admin'), /brukes/);
+  assert.equal(
+    existsSync(s.store.safe('stations', s.stationId, 'firmware', `${ready.release_id}.bin`)),
+    true,
+  );
+  const ota = await s.builds.start(s.stationId, { ...input, purpose: 'ota' }, 'admin');
+  const candidate = result(s, ota);
+  const trial = proposeFirmware(s.store, candidate.release_id, 'admin');
+  assert.throws(() => s.builds.remove(ota.id, 'admin'), /brukes/);
+  s.store.begin(trial.id, 'admin');
+  s.store.rollback(trial.id);
+  assert.throws(() => s.builds.remove(ota.id, 'admin'), /brukes/, 'queued rollback command keeps its image');
+  s.tick(300001);
+  s.store.sweep();
+  recordDeviceHealth(s.store, s.stationId, { online: true, buildId: ota.id });
+  assert.throws(() => s.builds.remove(ota.id, 'admin'), /brukes/);
+  recordDeviceHealth(s.store, s.stationId, { online: true, buildId: initial.id });
+  const running = await s.builds.start(s.stationId, input, 'admin');
+  s.builds.cancel(running.id, 'admin');
+  assert.throws(() => s.builds.remove(running.id, 'admin'), /avslutte/);
+  writeFileSync(join(s.builds.root, running.id, 'finished.json'), JSON.stringify({ at: Date.now() }));
+  assert.deepEqual(s.builds.remove(running.id, 'admin'), { ok: true });
+});
+
+test('build history pages through old jobs without duplicates even when timestamps are equal', async (t) => {
+  const s = await fixture(t),
+    build = await s.builds.start(s.stationId, input, 'admin');
+  const ready = result(s, build);
+  const insert = s.store.db.prepare(
+    "INSERT INTO firmware_builds(id,station_id,state,created_at,updated_at,payload,log) VALUES (?,?,'failed',?,?,?,'')",
+  );
+  for (let i = 0; i < 44; i++) insert.run(randomUUID(), s.stationId, s.now(), s.now(), ready.payload);
+  let before,
+    ids = [];
+  do {
+    const page = s.builds.status(s.stationId, before);
+    ids.push(...page.builds.map((b) => b.id));
+    before = page.nextCursor || undefined;
+  } while (before);
+  assert.equal(ids.length, 45);
+  assert.equal(new Set(ids).size, 45);
+  assert.throws(() => s.builds.status(s.stationId, '../../etc'), /Invalid|invalid|string|format/i);
+});
 
 test('MAX3485 ISS builds bind selected GPIOs and station to signed USB and OTA and reject unsupported Vue', async (t) => {
   const s = await fixture(t);

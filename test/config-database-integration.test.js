@@ -17,6 +17,7 @@ import { CertificateManager } from '../server/certificates.js';
 import { CertificateIssuer } from '../server/pki.js';
 import { FirmwareBuilds } from '../server/firmware-builds.js';
 import { controlApp } from '../server/app.js';
+import { ingestDeviceLog } from '../server/device-logs.js';
 test(
   'real MariaDB is authoritative for settings, changes, audit and secrets; weather remains separate and rollback/restart retain state',
   { skip: !process.env.WG_MARIADB_BIN, timeout: 90000 },
@@ -89,6 +90,50 @@ test(
       initialize(store, cfg.defaults);
       assert.equal(store.db.backend, 'mariadb');
       await t.test(
+        'MQTT log HTTP reader combines local logs with MariaDB commands without a cross-store join',
+        async () => {
+          const agent = request.agent(controlApp({ store, config: cfg, directory: directory() }).app);
+          const login = await agent
+            .post('/api/login')
+            .set('Origin', cfg.defaults.adminOrigin)
+            .send({ username: 'test', password: 'valid-test-password' })
+            .expect(200);
+          const path = `/api/devices/${id}/logs`;
+          const empty = await agent.get(`${path}?after=0`).expect(200);
+          assert.equal(empty.body.session, null);
+          const lease = await agent
+            .post(`${path}/session`)
+            .set('Origin', cfg.defaults.adminOrigin)
+            .set('X-CSRF-Token', login.body.csrf)
+            .send({ seconds: 120 })
+            .expect(202);
+          store.db.prepare("UPDATE commands SET state='applied' WHERE id=?").run(lease.body.commandId);
+          ingestDeviceLog(
+            store,
+            id,
+            Buffer.from(
+              JSON.stringify({
+                version: 1,
+                stationId: id,
+                sessionId: lease.body.sessionId,
+                bootId: '11111111-1111-4111-8111-111111111111',
+                sequence: 1,
+                uptimeMs: 1000,
+                level: 'info',
+                message: 'Radio ready',
+                dropped: 0,
+              }),
+            ),
+          );
+          const streamed = await agent.get(`${path}?after=0`).expect(200);
+          assert.equal(streamed.body.session.state, 'applied');
+          assert.equal(streamed.body.entries[0].message, 'Radio ready');
+          assert.equal(store.db.local.prepare('SELECT COUNT(*) AS n FROM commands').get().n, 0);
+          const polled = await agent.get(`${path}?after=${streamed.body.cursor}`).expect(200);
+          assert.equal(polled.body.entries.length, 0);
+        },
+      );
+      await t.test(
         'HTTP freshness trials and device command trials work against MariaDB and roll back atomically',
         async () => {
           const agent = request.agent(controlApp({ store, config: cfg, directory: directory() }).app);
@@ -119,7 +164,11 @@ test(
             await post(`/api/changes/${drafted.body.id}/cancel`).expect(200);
             assert.deepEqual(store.confirmedValue(scope), current.value);
           }
-          const commands = store.db.prepare('SELECT sequence,kind FROM commands ORDER BY sequence').all();
+          const commands = store.db
+            .prepare(
+              "SELECT sequence,kind FROM commands WHERE kind IN ('test_config','rollback_config') ORDER BY sequence",
+            )
+            .all();
           assert.deepEqual(
             commands.map((c) => c.kind),
             ['test_config', 'rollback_config'],
@@ -222,6 +271,14 @@ test(
           builds.cancel(buildId, 'test');
           assert.equal(builds.row(buildId).state, 'failed');
           assert.equal(existsSync(join(builds.root, buildId, 'request.json')), false);
+          writeFileSync(join(builds.root, buildId, 'finished.json'), JSON.stringify({ at: Date.now() }));
+          await agent
+            .delete(`/api/firmware-builds/${buildId}`)
+            .set('Origin', cfg.defaults.adminOrigin)
+            .set('X-CSRF-Token', login.body.csrf)
+            .expect(200);
+          assert.equal(builds.row(buildId).state, 'deleted');
+          assert.equal(existsSync(join(builds.root, buildId)), false);
         },
       );
       const apiClients = new ApiClients(store, {

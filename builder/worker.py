@@ -22,6 +22,7 @@ ENVIRONMENT = os.environ.get("WG_ENVIRONMENT", "production")
 UUID = re.compile(r"^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$")
 stop = threading.Event()
 active = None
+STARTED_AT = int(time.time() * 1000)
 
 
 def terminate_compiler():
@@ -53,7 +54,7 @@ def atomic(path, value):
 
 def heartbeat():
     while not stop.is_set():
-        atomic(JOBS / "worker.json", {"at": int(time.time() * 1000), "environment": ENVIRONMENT})
+        atomic(JOBS / "worker.json", {"at": int(time.time() * 1000), "startedAt": STARTED_AT, "environment": ENVIRONMENT})
         stop.wait(3)
 
 
@@ -160,6 +161,9 @@ def main():
             except Exception:
                 if not (directory / "cancel").exists():
                     atomic(directory / "result.json", {"error": "build_failed"})
+            finally:
+                if directory.is_dir():
+                    atomic(directory / "finished.json", {"at": int(time.time() * 1000)})
             if stop.is_set():
                 break
         stop.wait(1)

@@ -35,6 +35,17 @@ export function WindSettings({ item, set, lastPacket }) {
           </select>
         </label>
       </div>
+      <label>
+        Pilen viser
+        <select
+          aria-label="Pilen viser"
+          value={settings.arrowDirection}
+          onChange={(e) => change('arrowDirection', e.target.value)}
+        >
+          <option value="from">Retningen vinden kommer fra</option>
+          <option value="to">Retningen vinden blåser mot</option>
+        </select>
+      </label>
       <label className="checkbox">
         <input
           type="checkbox"
@@ -108,7 +119,7 @@ export function WindSettings({ item, set, lastPacket }) {
       <output className="direction-preview">
         {from === null
           ? 'Manglende retning'
-          : `Dekodet ${decoded.toFixed(1)}° → kalibrert fra ${from.toFixed(1)}° → pil mot ${normalizeDirection(from + 180).toFixed(1)}°`}
+          : `Dekodet ${decoded.toFixed(1)}° → kalibrert fra ${from.toFixed(1)}° → pil ${settings.arrowDirection === 'to' ? 'mot' : 'fra'} ${(settings.arrowDirection === 'to' ? normalizeDirection(from + 180) : from).toFixed(1)}°`}
       </output>
       <p className="muted small">
         Automatisk følger valgt stasjonsmodell. Kontroller mot kjent vindretning før du bytter profil.

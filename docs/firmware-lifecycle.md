@@ -17,6 +17,8 @@ Sekvens må økes for hver ny test/utgivelse; den er ikke bare et versjonsnavn. 
 
 Last opp JSON under **Firmware**, velg **Opprett testutkast**, deretter **Test endringen**. Gatewayen distribuerer blokker bare for den aktive testen og riktig stasjon. **Gjør gjeldende** er tilgjengelig først etter kvittering og ferske sensordata fra riktig utgivelse. Ubekreftet test og eksplisitt avbryt gir tilbakeføring; faktisk commit-kvittering fullfører endringen på serveren. Test på én pilot først. Ingen vilkårlig shell er tilgjengelig på ESP32.
 
+Standardfristen på **300 sekunder** er en bekreftelsesfrist fra testen startes, ikke obligatorisk ventetid. Bekreft så snart enheten har godkjent teststatus og riktige målinger. Uten bekreftelse gjenoppretter gatewayen tidligere innstillinger, og ESP32 har i tillegg en lokal frist som ikke krever kontakt med gatewayen. Konfigurasjonstester bruker UTC-frist og monoton tid; en separat vakt starter enheten på nytt ved utløp hvis hovedtasken er blokkert. Ubekreftet konfigurasjon fjernes ved oppstart, før nettverk kobles til. OTA har egen frist og tilbakeføring til forrige app-slot med den slotens bekreftede innstillinger. USB-flashing er en direkte installasjon uten denne femminutters tilbakeføringen.
+
 ## Sertifikatfornyelse
 
 USB-installasjon direkte i adminpanelet og sanntidslogger via USB/MQTT er beskrevet i [nettleserveiledningen](esp32-browser.md). USB bruker en komplett `.usb-flash.json`-pakke, separat fra OTA-utgivelsen.

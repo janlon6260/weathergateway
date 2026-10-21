@@ -96,7 +96,7 @@ export function adminSnapshot(store) {
           lastContactAt: lastContact ? new Date(lastContact).toISOString() : null,
           timeoutSeconds,
         };
-        result.wind = windPresentation(result.wlatest, result.bearing);
+        result.wind = windPresentation(result.wlatest, result.bearing, s.windDirection?.arrowDirection);
         return [s.key, result];
       }),
   );

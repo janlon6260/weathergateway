@@ -80,7 +80,7 @@ export function uploadFirmware(store, config, input, actor) {
 export function firmwareReleases(store) {
   return store.db
     .prepare(
-      "SELECT r.id,r.station_id,r.manifest,r.created_at,COALESCE(json_extract(b.payload,'$.purpose'),'ota') AS installation FROM firmware_releases r LEFT JOIN firmware_builds b ON b.release_id=r.id ORDER BY r.created_at DESC LIMIT 100",
+      "SELECT r.id,r.station_id,r.manifest,r.created_at,COALESCE(json_extract(b.payload,'$.purpose'),'ota') AS installation FROM firmware_releases r LEFT JOIN firmware_builds b ON b.release_id=r.id WHERE b.state IS NULL OR b.state NOT IN ('deleted','deleting') ORDER BY r.created_at DESC LIMIT 100",
     )
     .all()
     .map((r) => ({ ...r, manifest: JSON.parse(r.manifest) }));
@@ -88,6 +88,12 @@ export function firmwareReleases(store) {
 export function proposeFirmware(store, releaseId, actor) {
   const release = store.db.prepare('SELECT * FROM firmware_releases WHERE id=?').get(id.parse(releaseId));
   if (!release) throw new Rejected('Utgivelsen finnes ikke', 404);
+  if (
+    store.db
+      .prepare("SELECT 1 FROM firmware_builds WHERE release_id=? AND state IN ('deleted','deleting')")
+      .get(release.id)
+  )
+    throw new Rejected('Bygget er slettet fra serveren', 404);
   const build = store.db
     .prepare("SELECT payload FROM firmware_builds WHERE release_id=? AND state='ready'")
     .get(release.id);

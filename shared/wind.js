@@ -5,7 +5,7 @@ export function beaufort(speedMs) {
     .length;
 }
 export const compassPoints = ['N', 'NØ', 'Ø', 'SØ', 'S', 'SV', 'V', 'NV'];
-export function windPresentation(speedMs, fromDegrees) {
+export function windPresentation(speedMs, fromDegrees, arrowDirection = 'from') {
   const force = beaufort(speedMs);
   const from =
     typeof fromDegrees === 'number' && Number.isFinite(fromDegrees) && fromDegrees >= 0 && fromDegrees <= 360
@@ -16,7 +16,8 @@ export function windPresentation(speedMs, fromDegrees) {
     speedMs: force === null ? null : speedMs,
     fromDegrees: from,
     toDegrees: to,
-    arrowRotationDegrees: to,
+    arrowRotationDegrees: to === null ? null : arrowDirection === 'to' ? to : from,
+    arrowDirection: arrowDirection === 'to' ? 'to' : 'from',
     fromCompass: from === null ? null : compassPoints[Math.round(from / 45) % 8],
     toCompass: to === null ? null : compassPoints[Math.round(to / 45) % 8],
     beaufort: force,

@@ -6,13 +6,14 @@ export function WindReading({ data = {}, now }) {
   const wind = windPresentation(
     typeof speed === 'number' ? speed : null,
     typeof from === 'number' ? from : null,
+    data.wind?.arrowDirection,
   );
   const label =
     wind.beaufort === 0
       ? 'Stille'
       : wind.toDegrees === null
         ? 'Vindretning mangler'
-        : `Vind fra ${wind.fromCompass} (${Math.round(wind.fromDegrees)}°), mot ${wind.toCompass} (${Math.round(wind.toDegrees)}°)`;
+        : `Vind fra ${wind.fromCompass} (${Math.round(wind.fromDegrees)}°), blåser mot ${wind.toCompass} (${Math.round(wind.toDegrees)}°). Pilen viser ${wind.arrowDirection === 'to' ? 'mot-retningen' : 'fra-retningen'}.`;
   return (
     <div className="wind-reading">
       <span>
@@ -25,7 +26,7 @@ export function WindReading({ data = {}, now }) {
           <span aria-hidden="true">{wind.beaufort === 0 ? '○' : '–'}</span>
         ) : (
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <path d="M12 2L6 9H10V22H14V9H18Z" transform={`rotate(${wind.toDegrees} 12 12)`} />
+            <path d="M12 2L6 9H10V22H14V9H18Z" transform={`rotate(${wind.arrowRotationDegrees} 12 12)`} />
           </svg>
         )}
         <strong>{wind.beaufort ?? '–'}</strong>

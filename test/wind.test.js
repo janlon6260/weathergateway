@@ -1,14 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { beaufort, windPresentation } from '../shared/wind.js';
-test('wind arrows point towards the destination, use clockwise degrees from north and place Beaufort on the speed scale', () => {
+test('wind arrows default to the source direction and can point towards the destination without changing bearings or Beaufort', () => {
   assert.deepEqual(
     [0, 90, 180, 270, 360].map((from) => windPresentation(6, from).toDegrees),
     [180, 270, 0, 90, 180],
   );
   const west = windPresentation(6, 270);
   assert.equal(west.toCompass, 'Ø');
-  assert.equal(west.arrowRotationDegrees, 90);
+  assert.equal(west.arrowRotationDegrees, 270);
+  assert.equal(west.arrowDirection, 'from');
+  assert.equal(windPresentation(6, 270, 'to').arrowRotationDegrees, 90);
+  assert.equal(windPresentation(6, 270, 'to').fromDegrees, 270);
+  assert.equal(windPresentation(6, 270, 'to').toDegrees, 90);
   assert.equal(west.beaufort, 4);
   assert.equal(windPresentation(0, 270).toDegrees, null);
   assert.equal(windPresentation(0, null).beaufort, 0);
