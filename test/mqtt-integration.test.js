@@ -15,6 +15,8 @@ import { startWorker } from '../server/worker.js';
 import { observation } from './helpers.js';
 import { mqttSubjectAltNames } from '../server/tls-identities.js';
 import { logSession, readDeviceLogs } from '../server/device-logs.js';
+import { deviceProfile } from '../shared/device-hardware.js';
+import { deviceSchema } from '../server/schema.js';
 
 const binary = process.env.WG_MOSQUITTO_BIN;
 const deadline = (promise, ms = 8000) => {
@@ -268,6 +270,47 @@ test(
       assert.equal(
         store.db.prepare('SELECT COUNT(*) AS n FROM observations WHERE station_id=?').get(second.stationId).n,
         0,
+      );
+      // The native cabled protocol traverses the same authenticated, durable
+      // path as radio. No RSSI or invented radio CRC is attached to its bytes.
+      assert.equal(store.confirmedValue(`station:${second.stationId}`).model, 'Davis Vantage Pro2');
+      const wired = deviceSchema.parse(
+        deviceProfile(store.confirmedValue(`device:${second.stationId}`), 'davis-iss-rs485'),
+      );
+      store.db
+        .prepare('UPDATE configuration SET payload=? WHERE scope=?')
+        .run(JSON.stringify(wired), `device:${second.stationId}`);
+      const wiredTopic = `wg/v1/development/stations/${second.stationId}`;
+      await b.subscribeAsync(`${wiredTopic}/telemetry-receipt`, { qos: 1 });
+      const native = observation(second.stationId, Date.now(), {
+        measurements: {},
+        source: {
+          protocol: 'davis-iss-rs485',
+          packet: Buffer.from('8004700f9900', 'hex').toString('base64'),
+        },
+      });
+      const stored = waitMessage(b, `${wiredTopic}/telemetry-receipt`);
+      await b.publishAsync(`${wiredTopic}/telemetry`, JSON.stringify(native), { qos: 1 });
+      assert.equal((await stored).status, 'stored');
+      const saved = JSON.parse(
+        store.db.prepare('SELECT body FROM observations WHERE station_id=?').get(second.stationId).body,
+      );
+      assert.equal(saved.quality.linkChecksum, 'none');
+      assert.equal(saved.measurements.temperatureC, (3993 / 160 - 32) / 1.8);
+      const rejected = waitMessage(b, `${wiredTopic}/telemetry-receipt`);
+      await b.publishAsync(
+        `${wiredTopic}/telemetry`,
+        JSON.stringify({
+          ...native,
+          sequence: 2,
+          source: { protocol: 'davis-iss-rs485', packet: Buffer.alloc(6).toString('base64') },
+        }),
+        { qos: 1 },
+      );
+      assert.equal((await rejected).status, 'rejected');
+      assert.equal(
+        store.db.prepare('SELECT COUNT(*) AS n FROM observations WHERE station_id=?').get(second.stationId).n,
+        1,
       );
     } catch (error) {
       error.message += `\nBroker diagnostic: ${logs}`;

@@ -23,6 +23,8 @@ Felt: `version:1`, `stationId`, `bootId`, monoton `sequence`, `observedAt` som U
 
 Interne enheter: °C, RH-prosent, m/s, hPa og mm. `pressureHpa` er havnivåjustert trykk; `stationPressureHpa` er absolutt trykk. ISS leverer ingen av disse. Lufttrykk står som manglende etter avtale. Ugyldige/manglende verdier er null/utelatt, ikke tallet null. Serveren legger til `receivedAt`, avledede størrelser og metode-/kalibreringsversjon. ISS-observasjoner har også `measurementTimes`, `freshFields`, `iss` og eventuelt `quality`; klienten kan ikke sette disse selv.
 
+Direkte kablet ISS bruker `source:{protocol:'davis-iss-rs485',packet:'BASE64'}` med nøyaktig seks originale byte, uten radiofelt eller syntetisk CRC. Device-profilen er `interface:'davis-iss-rs485'`, `uartBaud:'4800'`, `uartRx`, `rs485De`, `rs485Re` og de vanlige stasjons-/nettverksfeltene. Gatewayen krever riktig Vantage Pro2-profil og markerer `quality.linkChecksum:'none'`. ESP32 kontrollerer UART-feil og idle-avgrensning; kablet ISS støtter samme varige kø, lagringskvittering, signerte OTA og innstillingstilbakeføring som radio. Se [protokollkilder og MAX3485-oppsett](davis-rs485.md).
+
 Maksimal inntaksmelding er 16 KiB, med rategrense per stasjon. Bare kjente aktive stasjoner godtas. Emneidentitet og payload må stemme. Observasjoner over ett minutt frem i tid eller utenfor retensjon avvises. `(stationId,bootId,sequence)` gir idempotens.
 
 ## Kommandoer og kvitteringer

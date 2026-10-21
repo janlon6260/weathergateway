@@ -13,7 +13,7 @@ export function DeviceHardware({ value, onChange }) {
           ['radioReset', 'Radio RST'],
           ['radioDio0', 'Radio DIO0'],
         ]
-      : mode === 'davis-iss-rs485-capture'
+      : mode === 'davis-iss-rs485'
         ? [
             ['uartRx', 'MAX3485 RO → ESP32 RX'],
             ['rs485De', 'MAX3485 DE (holdes lav)'],
@@ -35,14 +35,13 @@ export function DeviceHardware({ value, onChange }) {
         >
           <option value="davis-iss-rfm69">Trådløs ISS – RFM69HCW EU868</option>
           <option value="weatherlink-serial">WeatherLink seriell – Davis-konsoll</option>
-          <option value="davis-iss-rs485-capture">Kablet ISS – MAX3485, opptak og diagnostikk</option>
+          <option value="davis-iss-rs485">Kablet ISS – MAX3485, uten konsoll</option>
         </select>
       </label>
-      {mode === 'davis-iss-rs485-capture' && (
+      {mode === 'davis-iss-rs485' && (
         <p className="notice">
-          Direkte ISS-protokoll er ikke verifisert ennå. Denne profilen logger rådata og sender ingen
-          kommandoer på ISS-bussen. Den produserer ikke værmålinger. Bruk MAX3485 med 3,3 V-logikk og separat,
-          korrekt ISS-strømforsyning. RS-485-opptak installeres via USB.
+          Direkte kablet Vantage Pro2 ISS: 4800 baud, 8N1. Bruk MAX3485 med 3,3 V-logikk og separat 5 V
+          ISS-strømforsyning. ESP32 lytter; den sender ingen kommandoer på ISS-bussen.
         </p>
       )}
       <div className="form-grid">
@@ -64,12 +63,10 @@ export function DeviceHardware({ value, onChange }) {
             <select
               aria-label="UART-hastighet"
               value={value.uartBaud}
+              disabled={mode === 'davis-iss-rs485'}
               onChange={(e) => set('uartBaud', e.target.value)}
             >
-              {(mode === 'davis-iss-rs485-capture'
-                ? ['1200', '2400', '4800', '9600', '19200', '38400']
-                : ['1200', '2400', '9600', '19200']
-              ).map((n) => (
+              {(mode === 'davis-iss-rs485' ? ['4800'] : ['1200', '2400', '9600', '19200']).map((n) => (
                 <option key={n}>{n}</option>
               ))}
             </select>

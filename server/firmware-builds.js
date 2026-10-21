@@ -273,11 +273,9 @@ export class FirmwareBuilds {
       });
     if (configuration.stationId !== stationId)
       throw new Rejected('Maskinvareoppsettet tilhører en annen stasjon', 400);
-    if (configuration.interface === 'davis-iss-rs485-capture') {
+    if (configuration.interface === 'davis-iss-rs485') {
       if (this.station(stationId).model !== 'Davis Vantage Pro2')
         throw new Rejected('Direkte kablet ISS krever Vantage Pro2', 400);
-      if (values.purpose !== 'usb')
-        throw new Rejected('Uverifisert RS-485-opptaksprofil kan bare installeres via USB', 409);
     }
     const serverCert = new X509Certificate(readFileSync(join(this.config.certificateRoot, 'server.pem')));
     if (

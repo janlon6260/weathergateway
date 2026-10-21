@@ -280,18 +280,18 @@ const serialDeviceSchema = z
   })
   .strict()
   .refine((v) => v.uartRx !== v.uartTx, 'RX og TX må være forskjellige');
-export const rs485CaptureDeviceSchema = z
+export const rs485DeviceSchema = z
   .object({
     ...deviceBase,
-    interface: z.literal('davis-iss-rs485-capture'),
+    interface: z.literal('davis-iss-rs485'),
     uartRx: gpio,
     rs485De: gpio,
     rs485Re: gpio,
-    uartBaud: z.enum(['1200', '2400', '4800', '9600', '19200', '38400']),
+    uartBaud: z.literal('4800'),
   })
   .strict()
   .refine((v) => new Set([v.uartRx, v.rs485De, v.rs485Re]).size === 3, 'RS-485-pinnene må være forskjellige');
-export const deviceSchema = z.union([radioDeviceSchema, serialDeviceSchema, rs485CaptureDeviceSchema]);
+export const deviceSchema = z.union([radioDeviceSchema, serialDeviceSchema, rs485DeviceSchema]);
 export function defaultDevice(stationId, publicOrigin, environment) {
   return radioDeviceSchema.parse({
     stationId,
@@ -351,6 +351,15 @@ export const telemetrySchema = z
       .optional(),
     source: z
       .discriminatedUnion('protocol', [
+        z
+          .object({
+            protocol: z.literal('davis-iss-rs485'),
+            packet: z
+              .string()
+              .length(8)
+              .regex(/^[A-Za-z0-9+/]{8}$/),
+          })
+          .strict(),
         z
           .object({
             protocol: z.literal('davis-loop'),

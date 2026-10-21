@@ -49,12 +49,14 @@ export const deviceHealthSchema = z
     wifiChannel: z.number().int().min(1).max(14).optional(),
     rs485: z
       .object({
-        captureOnly: z.literal(true),
-        baud: z.number().int().positive(),
+        protocol: z.literal('davis-iss-rs485-v1'),
+        checksum: z.literal('none'),
+        baud: z.literal(4800),
         bytesReceived: counter,
         uartErrors: counter,
         overflows: counter,
-        bytesOmitted: counter,
+        framesReceived: counter,
+        invalidFrames: counter,
       })
       .strict()
       .optional(),

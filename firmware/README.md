@@ -6,7 +6,7 @@ ESP-IDF 6.0.2 / 6.1, ESP32 med 4 MB flash, uten krav til PSRAM. MQTT 1.1.0 og cJ
 
 Avklart: Adafruit RFM69HCW 3070 og direkte europeisk Davis ISS på 868 MHz. SPI-standard er SCK18, MISO19, MOSI23, CS27, RST14 og DIO0/G0 på GPIO26; VIN til 3V3 og GND til GND. Se [kobling, hopping, sender-ID og fysisk prøve](../docs/davis-radio.md). Lufttrykk er manglende etter avtale.
 
-Kablet Vantage Pro2 ISS uten konsoll har en separat MAX3485-profil for **rådataopptak og diagnostikk**. Maskinvare og GPIO velges før serverbygg i adminpanelet. Profilen sender ingenting på RS-485-bussen og dekoder foreløpig ikke værdata; den kan bare installeres via USB. Protokoll, kontrollsum og separat ISS-strømforsyning må verifiseres før værdatadriveren kan ferdigstilles. Se [MAX3485-veiledningen](../docs/davis-rs485.md).
+Kablet Vantage Pro2 ISS uten konsoll støttes med **3,3 V MAX3485**, native 4800 baud / 8N1 og seksbytespakker. Maskinvare og GPIO velges før serverbygg i adminpanelet. Profilen dekoder værdata og støtter USB, signert OTA og normal konfigurasjonstilbakeføring. ISS får separat 5 V-forsyning. Kabelprotokollen har ingen kontrollsum, og dette bevares eksplisitt i kvalitet/helse. Se [MAX3485-veiledningen og protokollkildene](../docs/davis-rs485.md).
 
 Gateway kan angis med IP eller DNS-navn. IP må stå som **IP-SAN** i brokerens sertifikat. Sett `WG_MQTT_SERVER_NAMES` ved host-bootstrap dersom enhetene bruker andre adresser enn `WG_PUBLIC_ORIGIN`. CA-/navnekontroll beholdes også ved IP-tilkobling. ESP32 oppretter den utgående mTLS-forbindelsen; gatewayens kommandoer kommer tilbake over denne forbindelsen. En ESP32 trenger ingen innkommende internettport.
 
@@ -24,7 +24,7 @@ Vanlig installasjon gjøres nå i **Enheter → Bygg firmware på serveren**: an
 
 ## Første sikkerhetsprovisjonering
 
-Se [feilsøking av bygg og første oppstart](../docs/firmware-troubleshooting.md) ved DNS-, GPIO- eller radioproblemer. Fastvaren identifiserer seg som 2.4.0 og beholder applikasjonens INFO-logger også ved gjenbruk av eldre `sdkconfig` med WARN-nivå.
+Se [feilsøking av bygg og første oppstart](../docs/firmware-troubleshooting.md) ved DNS-, GPIO- eller radioproblemer. Fastvaren identifiserer seg som 2.4.1 og beholder applikasjonens INFO-logger også ved gjenbruk av eldre `sdkconfig` med WARN-nivå.
 
 [sdkconfig.production.defaults](sdkconfig.production.defaults) og [partitions.production.csv](partitions.production.csv) klargjør Secure Boot V2, flashkryptering i release-modus og NVS-kryptering for **fysisk verifisert ESP32 revision 3.0+**. NVS-nøkkelpartisjonen er separat og kryptert. Partisjonstabell/NVS flyttes; denne profilen er en førsteprovisjonering, ikke en OTA-migrasjon fra vanlig utviklingspartisjonering.
 

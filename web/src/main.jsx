@@ -1564,19 +1564,6 @@ function FirmwareManager({ releases, stations, pending, upload, deploy, build })
 }
 function DeviceForm({ record, pending, save }) {
   const [item, set] = useState(record.value);
-  if (item.interface === 'davis-iss-rs485-capture')
-    return (
-      <div className="settings-form">
-        <h2 id="modal-title">RS-485-opptaksprofil</h2>
-        <p>
-          Dette er en mottaksprofil for å dokumentere den kablede ISS-protokollen. Endre GPIO, UART-hastighet
-          og nettverk ved å bygge en ny USB-pakke under Enheter.
-        </p>
-        <fieldset disabled>
-          <DeviceHardware value={item} onChange={() => {}} />
-        </fieldset>
-      </div>
-    );
   return (
     <form
       onSubmit={(e) => {
@@ -1629,6 +1616,8 @@ function DeviceForm({ record, pending, save }) {
             <Field label="Radio RST GPIO" name="radioReset" type="number" item={item} set={set} />
             <Field label="Radio G0 / DIO0 GPIO" name="radioDio0" type="number" item={item} set={set} />
           </>
+        ) : item.interface === 'davis-iss-rs485' ? (
+          <DeviceHardware value={item} onChange={set} />
         ) : (
           <>
             <label>

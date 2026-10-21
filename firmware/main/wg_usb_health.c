@@ -24,7 +24,7 @@ static const char *reset_name(void) {
   }
 }
 void wg_health_fields(cJSON *o) {
-  cJSON_AddStringToObject(o,"bootId",boot);cJSON_AddStringToObject(o,"firmwareVersion","2.4.0");
+  cJSON_AddStringToObject(o,"bootId",boot);cJSON_AddStringToObject(o,"firmwareVersion","2.4.1");
   cJSON_AddStringToObject(o,"idfVersion",esp_get_idf_version());
   cJSON_AddNumberToObject(o,"uptimeMs",esp_timer_get_time()/1000);
   cJSON_AddNumberToObject(o,"freeHeapBytes",esp_get_free_heap_size());
@@ -47,7 +47,7 @@ static void usb_task(void *unused) {
     for(size_t i=14;valid&&i<46;i++)if(!isxdigit((unsigned char)line[i]))valid=false;
     if(valid&&esp_timer_get_time()-last>500000){cJSON *o=cJSON_CreateObject();
       cJSON_AddStringToObject(o,"challenge",line+14);cJSON_AddStringToObject(o,"stationId",WG_STATION_ID);
-      cJSON_AddStringToObject(o,"configurationHash",get_hash());cJSON_AddStringToObject(o,"firmwareVersion","2.4.0");
+      cJSON_AddStringToObject(o,"configurationHash",get_hash());cJSON_AddStringToObject(o,"firmwareVersion","2.4.1");
       cJSON_AddStringToObject(o,"bootId",boot);cJSON_AddStringToObject(o,"status","ready");
       char *json=cJSON_PrintUnformatted(o);if(json){printf("WG_BOOT_READY %s\n",json);fflush(stdout);free(json);}cJSON_Delete(o);last=esp_timer_get_time();
     }

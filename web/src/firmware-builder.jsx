@@ -122,7 +122,6 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
                 setForm((old) => ({
                   ...old,
                   configuration,
-                  purpose: configuration.interface === 'davis-iss-rs485-capture' ? 'usb' : old.purpose,
                 }))
               }
             />
@@ -154,9 +153,7 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
               Installasjon
               <select {...field('purpose')}>
                 <option value="usb">USB på denne datamaskinen</option>
-                <option value="ota" disabled={form.configuration?.interface === 'davis-iss-rs485-capture'}>
-                  Nettverk via MQTT/TLS (OTA)
-                </option>
+                <option value="ota">Nettverk via MQTT/TLS (OTA)</option>
               </select>
             </label>
             <label>
@@ -174,8 +171,8 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
         </fieldset>
       </form>
       <p className="muted small">
-        ESP-WROOM-32 · RFM69HCW EU868 · standard flashprofil. Denne profilen aktiverer ikke Secure Boot eller
-        flashkryptering. Den kan USB-installeres på enheter uten slike eFuses; OTA-installasjon på
+        ESP-WROOM-32 · valgt stasjonsgrensesnitt · standard flashprofil. Denne profilen aktiverer ikke Secure
+        Boot eller flashkryptering. Den kan USB-installeres på enheter uten slike eFuses; OTA-installasjon på
         maskinvaresikrede enheter krever tilsvarende signert sikkerhetsprofil.
       </p>
       {status?.builds.map((build) => (

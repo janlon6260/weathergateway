@@ -115,26 +115,19 @@ function result(s, build) {
   return s.builds.row(build.id);
 }
 
-test('MAX3485 capture builds bind selected GPIOs and station to signed USB, refuse OTA and Vue, and do not pass production weather readiness', async (t) => {
+test('MAX3485 ISS builds bind selected GPIOs and station to signed USB and OTA and reject unsupported Vue', async (t) => {
   const s = await fixture(t);
-  const vueProfile = deviceProfile(
-    s.store.confirmedValue(`device:${s.stationId}`),
-    'davis-iss-rs485-capture',
-  );
+  const vueProfile = deviceProfile(s.store.confirmedValue(`device:${s.stationId}`), 'davis-iss-rs485');
   await assert.rejects(
     s.builds.start(s.stationId, { ...input, configuration: vueProfile }, 'admin'),
     /Vantage Pro2/,
   );
   s.stationId = s.store.stationList().find((r) => r.value.model === 'Davis Vantage Pro2').value.id;
   const configuration = {
-    ...deviceProfile(s.store.confirmedValue(`device:${s.stationId}`), 'davis-iss-rs485-capture'),
+    ...deviceProfile(s.store.confirmedValue(`device:${s.stationId}`), 'davis-iss-rs485'),
     uartBaud: '4800',
     uartRx: 17,
   };
-  await assert.rejects(
-    s.builds.start(s.stationId, { ...input, configuration, purpose: 'ota' }, 'admin'),
-    /bare installeres via USB/,
-  );
   await assert.rejects(
     s.builds.start(
       s.stationId,
@@ -145,7 +138,7 @@ test('MAX3485 capture builds bind selected GPIOs and station to signed USB, refu
   );
   const build = await s.builds.start(s.stationId, { ...input, configuration }, 'admin');
   const staged = JSON.parse(readFileSync(join(s.builds.root, build.id, 'request.json'), 'utf8'));
-  assert.ok(staged.files['provisioning.h'].includes('davis-iss-rs485-capture'));
+  assert.ok(staged.files['provisioning.h'].includes('davis-iss-rs485'));
   assert.equal(result(s, build).state, 'ready');
   const bundle = s.builds.usb(build.id);
   await prepareUsbBundle(bundle, s.stationId, s.store.environment);
@@ -156,9 +149,75 @@ test('MAX3485 capture builds bind selected GPIOs and station to signed USB, refu
   assert.equal(saved.mqttHost, input.mqttHost);
   assert.equal(
     readiness(s.store, s.config).checks.find((c) => c.id === `interface:${s.stationId}`).passed,
-    false,
+    true,
   );
+  const ota = await s.builds.start(s.stationId, { ...input, configuration, purpose: 'ota' }, 'admin');
+  assert.equal(result(s, ota).state, 'ready');
+  const proposal = proposeFirmware(s.store, s.builds.row(ota.id).release_id, 'admin');
+  assert.equal(proposal.scope, `firmware:${s.stationId}`);
 });
+test('OTA can change radio to native RS485 only during the signed firmware trial and commits the interface after matching weather and ACK', async (t) => {
+  const s = await fixture(t);
+  s.stationId = s.store.stationList().find((r) => r.value.model === 'Davis Vantage Pro2').value.id;
+  const initial = await s.builds.start(s.stationId, input, 'admin');
+  result(s, initial);
+  s.builds.usbComplete(initial.id, 'admin');
+  const before = s.store.confirmedValue(`device:${s.stationId}`),
+    configuration = deviceProfile(before, 'davis-iss-rs485');
+  const build = await s.builds.start(s.stationId, { ...input, configuration, purpose: 'ota' }, 'admin'),
+    ready = result(s, build),
+    candidate = JSON.parse(ready.payload).configuration;
+  const receive = (sequence, extra = {}) =>
+    ingest(
+      s.store,
+      s.stationId,
+      observation(s.stationId, s.now(), {
+        sequence,
+        measurements: {},
+        firmwareReleaseId: ready.release_id,
+        configurationHash: hash(candidate),
+        source: {
+          protocol: 'davis-iss-rs485',
+          packet: Buffer.from('8004700f9900', 'hex').toString('base64'),
+        },
+        ...extra,
+      }),
+    );
+  assert.throws(() => receive(1));
+  const trial = proposeFirmware(s.store, ready.release_id, 'admin');
+  s.store.begin(trial.id, 'admin');
+  const command = s.store.db
+    .prepare("SELECT * FROM commands WHERE change_id=? AND kind='test_firmware'")
+    .get(trial.id);
+  handleAck(s.store, s.stationId, {
+    version: 1,
+    stationId: s.stationId,
+    commandId: command.id,
+    status: 'testing',
+    firmwareReleaseId: ready.release_id,
+    configurationHash: hash(candidate),
+  });
+  assert.throws(() => receive(2, { firmwareReleaseId: '402500fa-a03b-4dcf-af73-11109f9b8330' }));
+  s.tick(1);
+  receive(3);
+  assert.equal(firmwareHealth(s.store, s.stationId), true);
+  assert.deepEqual(s.store.confirmedValue(`device:${s.stationId}`), before);
+  s.store.confirm(trial.id, 'admin');
+  const commit = s.store.db
+    .prepare("SELECT * FROM commands WHERE change_id=? AND kind='commit_firmware'")
+    .get(trial.id);
+  handleAck(s.store, s.stationId, {
+    version: 1,
+    stationId: s.stationId,
+    commandId: commit.id,
+    status: 'applied',
+    firmwareReleaseId: ready.release_id,
+    configurationHash: hash(candidate),
+  });
+  assert.deepEqual(s.store.confirmedValue(`device:${s.stationId}`), candidate);
+  assert.equal(s.store.getChange(trial.id).state, 'confirmed');
+});
+
 test('server build retains encrypted identity, signs USB and OTA, keeps passwords out of database/status/audit and rejects stale artifacts', async (t) => {
   const s = await fixture(t),
     build = await s.builds.start(s.stationId, input, 'admin');

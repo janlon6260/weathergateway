@@ -8,7 +8,7 @@ import { hash } from './store.js';
 export const acceptanceChecks = {
   dockerRuntime: 'Docker/Portainer: oppstart, volumer, omstart og ressursgrenser',
   externalIsolation: 'Admin er utilgjengelig fra eksternt IPv4- og IPv6-nett',
-  radioReference: 'Alle fire ISS-stasjoner er sammenlignet med Davis-referanse',
+  radioReference: 'Alle ISS-stasjoner, radio og kablet, er sammenlignet med Davis-referanse',
   deviceRollback: 'Fysisk strømkutt, feil gateway-IP og OTA-/konfigurasjonstilbakeføring',
   restore: 'Gjenoppretting av data, enhetsidentiteter og nøkler er prøvd isolert',
   compatibility: 'Sunnmørsvær og avtalte Weather Display-utdata er sammenlignet',
@@ -71,8 +71,10 @@ export function readiness(store, config) {
   for (const station of stations) {
     add(
       `interface:${station.id}`,
-      `${station.name}: verifiserbar værdataprofil`,
-      store.confirmedValue(`device:${station.id}`).interface !== 'davis-iss-rs485-capture',
+      `${station.name}: støttet værdataprotokoll`,
+      [undefined, 'davis-iss-rfm69', 'davis-iss-rs485'].includes(
+        store.confirmedValue(`device:${station.id}`).interface,
+      ),
     );
     const row = store.db
         .prepare(

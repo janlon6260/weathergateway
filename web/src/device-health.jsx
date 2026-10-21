@@ -70,13 +70,16 @@ export function DeviceHealth({ health, now }) {
           {health.rs485 && (
             <>
               <dt>RS-485-profil</dt>
-              <dd>Kun rådataopptak · {health.rs485.baud} baud</dd>
+              <dd>Kablet ISS · {health.rs485.baud} baud · uten kontrollsum på bussen</dd>
               <dt>Mottatte RS-485-byte</dt>
               <dd>{health.rs485.bytesReceived ?? 0}</dd>
-              <dt>UART-feil / overflyt / utelatte byte</dt>
+              <dt>Gyldige / avviste rammer</dt>
               <dd>
-                {health.rs485.uartErrors ?? 0} / {health.rs485.overflows ?? 0} /{' '}
-                {health.rs485.bytesOmitted ?? 0}
+                {health.rs485.framesReceived ?? 0} / {health.rs485.invalidFrames ?? 0}
+              </dd>
+              <dt>UART-feil / overflyt</dt>
+              <dd>
+                {health.rs485.uartErrors ?? 0} / {health.rs485.overflows ?? 0}
               </dd>
             </>
           )}

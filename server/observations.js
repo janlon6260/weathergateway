@@ -61,7 +61,7 @@ function addRollups(store, stationId, body, observed, rainClicks) {
       for (const period of [day, new Date(Math.floor(observed / 3600000) * 3600000).toISOString()])
         increment.run(stationId, period, metric, v, v, v, observed, observed);
     }
-  if (body.source?.protocol === 'davis-iss') {
+  if (body.iss) {
     return;
   }
   const counter = typeof rainClicks === 'number' ? rainClicks : body.measurements.rainTodayMm,
@@ -114,7 +114,7 @@ export function ingest(store, identity, input, { enqueueDatabase = true, histori
     throw new Rejected('Måletid er utenfor tillatt tidsrom', 422);
   let rainClicks;
   try {
-    if (message.source?.protocol === 'davis-iss') {
+    if (['davis-iss', 'davis-iss-rs485'].includes(message.source?.protocol)) {
       assembleIss(store, message, station);
     } else if (message.source) {
       const decoded = decodeLoop(Buffer.from(message.source.packet, 'base64'), station.rainCounterMmPerUnit);
@@ -195,7 +195,7 @@ export function ingest(store, identity, input, { enqueueDatabase = true, histori
           .prepare('UPDATE observations SET body=? WHERE station_id=? AND boot_id=? AND sequence=?')
           .run(JSON.stringify(body), identity, message.bootId, message.sequence);
         if (enqueueDatabase) queueDatabaseObservation(store, station, body);
-        if (!historical) retainDisplay(store,identity,body);
+        if (!historical) retainDisplay(store, identity, body);
       }
       return result.changes;
     })

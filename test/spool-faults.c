@@ -31,8 +31,8 @@ esp_err_t nvs_set_u64(nvs_handle_t h,const char *key,uint64_t value) {(void)h;if
 esp_err_t nvs_commit(nvs_handle_t h) {(void)h;if(cut_commit)longjmp(power_failure,1);durable_ack=staging_ack;durable_drop=staging_drop;return ESP_OK;}
 uint32_t esp_rom_crc32_le(uint32_t seed,const uint8_t *data,size_t length) {uint32_t c=~seed;for(size_t i=0;i<length;i++){c^=data[i];for(int bit=0;bit<8;bit++)c=(c>>1)^(0xedb88320u&-(c&1));}return ~c;}
 static void reset(void) {memset(disk,255,sizeof(disk));durable_ack=durable_drop=staging_ack=staging_drop=0;cut_write=-1;cut_commit=cut_erase=0;wg_spool_init(1);}
-static wg_spool_record_t sample(unsigned sequence) {wg_spool_record_t r;memset(&r,0,sizeof(r));snprintf(r.boot_id,sizeof(r.boot_id),"402500fa-a03b-4dcf-af73-11109f9b8329");memset(r.configuration_hash,'a',64);r.sequence=sequence;r.packet_size=10;r.packet[0]=sequence;return r;}
-static void ack_next(unsigned expected) {wg_spool_record_t r;assert(wg_spool_peek(&r));assert(r.sequence==expected);wg_spool_ack(r.number);}
+static wg_spool_record_t sample(unsigned sequence) {wg_spool_record_t r;memset(&r,0,sizeof(r));snprintf(r.boot_id,sizeof(r.boot_id),"402500fa-a03b-4dcf-af73-11109f9b8329");memset(r.configuration_hash,'a',64);r.sequence=sequence;r.packet_size=sequence%3==0?6:sequence%3==1?10:99;r.packet[0]=sequence;return r;}
+static void ack_next(unsigned expected) {wg_spool_record_t r;assert(wg_spool_peek(&r));assert(r.sequence==expected);wg_spool_record_t expected_record=sample(expected);assert(r.packet_size==expected_record.packet_size&&!memcmp(r.packet,expected_record.packet,r.packet_size));wg_spool_ack(r.number);}
 static void replay_and_capacity(void) {
   reset();assert(wg_spool_capacity()==9);
   for(unsigned i=1;i<=9;i++){wg_spool_record_t r=sample(i);assert(wg_spool_append(&r));}
