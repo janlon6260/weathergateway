@@ -89,6 +89,67 @@ test(
       initialize(store, cfg.defaults);
       assert.equal(store.db.backend, 'mariadb');
       await t.test(
+        'HTTP freshness trials and device command trials work against MariaDB and roll back atomically',
+        async () => {
+          const agent = request.agent(controlApp({ store, config: cfg, directory: directory() }).app);
+          const logged = await agent
+            .post('/api/login')
+            .set('Origin', cfg.defaults.adminOrigin)
+            .send({ username: 'test', password: 'valid-test-password' })
+            .expect(200);
+          const post = (path, body = {}) =>
+            agent
+              .post(path)
+              .set('Origin', cfg.defaults.adminOrigin)
+              .set('X-CSRF-Token', logged.body.csrf)
+              .send(body);
+          for (const scope of [`station:${id}`, 'gateway', `device:${id}`]) {
+            const current = store.current(scope);
+            const value =
+              scope === 'gateway'
+                ? { ...current.value, dataWarningSeconds: 10 }
+                : scope.startsWith('station:')
+                  ? { ...current.value, freshness: { warningSeconds: 10, downSeconds: 30 } }
+                  : { ...current.value, sampleSeconds: 3 };
+            const drafted = await post('/api/changes', { scope, revision: current.revision, value }).expect(
+              201,
+            );
+            const tested = await post(`/api/changes/${drafted.body.id}/test`).expect(200);
+            assert.equal(tested.body.state, 'testing');
+            await post(`/api/changes/${drafted.body.id}/cancel`).expect(200);
+            assert.deepEqual(store.confirmedValue(scope), current.value);
+          }
+          const commands = store.db.prepare('SELECT sequence,kind FROM commands ORDER BY sequence').all();
+          assert.deepEqual(
+            commands.map((c) => c.kind),
+            ['test_config', 'rollback_config'],
+          );
+          assert.ok(commands[1].sequence > commands[0].sequence);
+          // Testing a station also sweeps expired device trials. Previously this
+          // rollback could surface the device SQL parse error on a threshold edit.
+          const device = store.current(`device:${id}`);
+          const trial = store.propose(
+            device.scope,
+            { ...device.value, sampleSeconds: 4 },
+            device.revision,
+            'test',
+          );
+          store.begin(trial.id, 'test');
+          const station = store.current(`station:${id}`);
+          const draft = await post('/api/changes', {
+            scope: station.scope,
+            revision: station.revision,
+            value: { ...station.value, freshness: { warningSeconds: 12, downSeconds: 40 } },
+          }).expect(201);
+          now += store.timeoutSeconds() * 1000 + 1;
+          await post(`/api/changes/${draft.body.id}/test`).expect(200);
+          assert.equal(store.getChange(trial.id).state, 'rolled_back');
+          assert.deepEqual(store.confirmedValue(device.scope), device.value);
+          await post(`/api/changes/${draft.body.id}/confirm`).expect(200);
+          assert.equal(store.confirmedValue(station.scope).freshness.warningSeconds, 12);
+        },
+      );
+      await t.test(
         'firmware HTTP request queues and updates a build against the existing MariaDB schema without a log default',
         async () => {
           const buildConfig = configuration({

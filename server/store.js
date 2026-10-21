@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS observations(station_id TEXT NOT NULL,boot_id TEXT NO
 CREATE INDEX IF NOT EXISTS observation_time ON observations(station_id,observed_at DESC);
 CREATE INDEX IF NOT EXISTS observation_retention ON observations(observed_at);
 CREATE INDEX IF NOT EXISTS observation_received ON observations(received_at);
+CREATE INDEX IF NOT EXISTS observation_station_received ON observations(station_id,received_at DESC);
 CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL,deadline INTEGER NOT NULL,state TEXT NOT NULL,change_id TEXT,attempt_at INTEGER,ack_json TEXT,sequence INTEGER);
 CREATE INDEX IF NOT EXISTS queued_commands ON commands(state,deadline);
 CREATE TABLE IF NOT EXISTS certificates(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,common_name TEXT NOT NULL,serial TEXT NOT NULL,expires_at INTEGER NOT NULL,certificate TEXT NOT NULL,revoked_at INTEGER);
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS weather_bins(station_id TEXT NOT NULL,hour INTEGER NO
 CREATE TABLE IF NOT EXISTS firmware_releases(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,manifest TEXT NOT NULL,signature TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(station_id,manifest));
 CREATE TABLE IF NOT EXISTS firmware_builds(id TEXT PRIMARY KEY,station_id TEXT NOT NULL,state TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,payload TEXT NOT NULL,release_id TEXT,error TEXT,log TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS telemetry_rejections(station_id TEXT NOT NULL,boot_id TEXT NOT NULL,sequence INTEGER NOT NULL,received_at INTEGER NOT NULL,reason TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(station_id,boot_id,sequence));
+CREATE INDEX IF NOT EXISTS telemetry_rejection_received ON telemetry_rejections(received_at);
 CREATE TABLE IF NOT EXISTS device_status(station_id TEXT PRIMARY KEY,received_at INTEGER NOT NULL,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS station_display(station_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings_secrets(name TEXT PRIMARY KEY,payload TEXT NOT NULL);
@@ -437,12 +439,11 @@ export class Store {
   queueCommand(stationId, kind, payload, deadline, changeId = null) {
     return this.db
       .transaction(() => {
+        // MariaDB 11.x does not support UPDATE ... RETURNING. Both operations
+        // remain under the same SQLite write lock / MariaDB transaction lock.
+        this.db.prepare("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='command_sequence'").run();
         const sequence = Number(
-          this.db
-            .prepare(
-              "UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='command_sequence' RETURNING value",
-            )
-            .get().value,
+          this.db.prepare("SELECT value FROM meta WHERE key='command_sequence'").get().value,
         );
         const commandId = randomUUID();
         this.db

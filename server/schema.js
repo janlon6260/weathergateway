@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { meteorologyDefaults, calibrationDefaults } from '../shared/meteorology-settings.js';
 import { alarmMetrics } from '../shared/alarm-metrics.js';
+import { windDirectionDefaults, windDirectionProfiles } from '../shared/wind-direction.js';
 export { meteorologyDefaults };
 import { databaseColumns, optionalDatabaseMetrics } from '../shared/database-columns.js';
 export { databaseColumns };
@@ -118,6 +119,22 @@ export const stationSchema = z
     exportName: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,60}\.txt$/),
     rainCounterMmPerUnit: z.number().positive().max(10).default(0.2),
     meteorology: meteorologySchema.default(meteorologyDefaults),
+    windDirection: z
+      .object({
+        decoder: z.enum(Object.keys(windDirectionProfiles)),
+        zero: z.enum(['north', 'missing', 'decode']),
+        reverse: z.boolean(),
+        rawStart: z.number().int().min(0).max(255),
+        rawEnd: z.number().int().min(0).max(255),
+        degreesStart: z.number().min(-360).max(720),
+        degreesEnd: z.number().min(-360).max(720),
+      })
+      .strict()
+      .refine(
+        (v) => v.decoder !== 'custom' || (v.rawStart !== v.rawEnd && v.degreesStart !== v.degreesEnd),
+        'Topunktskalering krever to forskjellige råverdier og vinkler',
+      )
+      .default(windDirectionDefaults),
     calibration: z
       .object({
         temperatureOffsetC: z.number().min(-20).max(20),

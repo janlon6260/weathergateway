@@ -3,6 +3,7 @@
 import { crcCcitt } from './davis.js';
 import { DateTime } from 'luxon';
 import { hash } from './store.js';
+import { decodeWindDirection, windDirectionDefaults } from '../shared/wind-direction.js';
 
 export const issAlgorithmVersion = 'wg-iss-1';
 export const issRainGapMs = (mmPerTip) => ((128 * mmPerTip) / 5000) * 3600000;
@@ -36,7 +37,7 @@ export function freshIssMeasurements(message, at) {
   return result;
 }
 const bounded = (v, min, max) => (Number.isFinite(v) && v >= min && v <= max ? v : null);
-export function decodeIss(packet, model, rainMmPerTip) {
+export function decodeIss(packet, model, rainMmPerTip, windDirection) {
   if (
     !Buffer.isBuffer(packet) ||
     packet.length !== 10 ||
@@ -45,9 +46,9 @@ export function decodeIss(packet, model, rainMmPerTip) {
     packet[9] !== 255
   )
     throw new Error('Ugyldig direkte ISS-pakke, CRC eller repeaterpakke');
-  return decodePayload(packet, model, rainMmPerTip);
+  return decodePayload(packet, model, rainMmPerTip, windDirection);
 }
-export function decodeWiredIss(packet, model, rainMmPerTip) {
+export function decodeWiredIss(packet, model, rainMmPerTip, windDirection) {
   if (
     !Buffer.isBuffer(packet) ||
     packet.length !== 6 ||
@@ -57,9 +58,9 @@ export function decodeWiredIss(packet, model, rainMmPerTip) {
     throw new Error('Ugyldig kablet ISS-pakke eller modell');
   // The native six-byte bus has no checksum. Never append a synthetic CRC or
   // claim radio integrity for these bytes. UART idle/error checks run on ESP32.
-  return decodePayload(packet, model, rainMmPerTip);
+  return decodePayload(packet, model, rainMmPerTip, windDirection);
 }
-function decodePayload(packet, model, rainMmPerTip) {
+function decodePayload(packet, model, rainMmPerTip, windDirection) {
   if (
     !['Davis Vantage Vue', 'Davis Vantage Pro2'].includes(model) ||
     !Number.isFinite(rainMmPerTip) ||
@@ -70,12 +71,7 @@ function decodePayload(packet, model, rainMmPerTip) {
   const type = packet[0] >> 4;
   const measurements = {
     windSpeedMs: packet[1] === 255 ? null : bounded(packet[1] * 0.44704, 0, 120),
-    windDirectionDeg:
-      packet[2] === 0
-        ? 0
-        : model === 'Davis Vantage Vue'
-          ? (packet[2] * 1.40625 + 0.3) % 360
-          : 9 + (packet[2] * 342) / 255,
+    windDirectionDeg: decodeWindDirection(packet[2], model, windDirection),
   };
   const rawFields = {};
   switch (type) {
@@ -130,6 +126,7 @@ export function assembleIss(store, message, station) {
     Buffer.from(message.source.packet, 'base64'),
     station.model,
     station.rainCounterMmPerUnit,
+    station.windDirection,
   );
   let device = store.current(`device:${station.id}`).value;
   if (message.firmwareReleaseId && message.configurationHash) {
@@ -203,6 +200,8 @@ export function assembleIss(store, message, station) {
     type: decoded.type,
     transmitterId: decoded.transmitterId,
     batteryLow: decoded.batteryLow,
+    rawWindDirectionByte: Buffer.from(message.source.packet, 'base64')[2],
+    windDirectionSettings: { ...windDirectionDefaults, ...station.windDirection },
     ...decoded.rawFields,
   };
   return decoded;

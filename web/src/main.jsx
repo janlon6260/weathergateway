@@ -7,6 +7,9 @@ import { DataFreshness, Measurement, FreshnessFields } from './freshness.jsx';
 import { dataStatus, freshnessThresholds } from '../../shared/freshness.js';
 import { DeviceHealth } from './device-health.jsx';
 import { WindReading } from './wind.jsx';
+import { WindSettings } from './wind-settings.jsx';
+import { StationDetails } from './station-details.jsx';
+import { RawPackets } from './raw-packets.jsx';
 import { ApiClientAdministration } from './api-clients.jsx';
 import { deviceInterfaceName } from '../../shared/device-hardware.js';
 import { DeviceHardware } from './device-hardware.jsx';
@@ -23,6 +26,7 @@ const labels = {
   overview: 'Oversikt',
   stations: 'Stasjoner',
   devices: 'Enheter',
+  packets: 'Rådata',
   changes: 'Endringer',
   settings: 'Innstillinger',
   reports: 'Rapporter',
@@ -38,6 +42,7 @@ const pageDescriptions = {
   overview: 'Status og siste målinger fra værstasjonene dine.',
   stations: 'Stasjoner, kalibrering, datakvalitet og eksportfiler.',
   devices: 'Tilkobling, radio og fjernstyring av ESP32-enhetene.',
+  packets: 'Mottatte Davis-pakker og dekodede verdier fra siste minutt.',
   changes: 'Test, kontroller og bekreft endringer før fristen løper ut.',
   settings: 'Gateway, innlogging og miljøspesifikke innstillinger.',
   reports: 'Historikk, grafer, klimautdata og rekorder.',
@@ -88,6 +93,7 @@ function App() {
     [now, setNow] = useState(Date.now()),
     [filter, setFilter] = useState(''),
     [selection, setSelection] = useState([]),
+    [packetStation, setPacketStation] = useState(''),
     [audit, setAudit] = useState([]);
   const csrf = useRef('');
   const offset = useRef(0);
@@ -411,7 +417,7 @@ function App() {
               onClick={() => setPage(p)}
             >
               <span className="nav-icon" aria-hidden="true">
-                {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓', '◇'][
+                {['◈', '▤', '⌁', '≋', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓', '◇'][
                   Object.keys(labels).indexOf(p)
                 ] || '⇄'}
               </span>
@@ -543,8 +549,7 @@ function App() {
                   <div>
                     <h2>Sanntidsdata</h2>
                     <p className="muted small">
-                      Siste mottatte verdier beholdes. Grønn: fersk · oransje: forsinket · rød: for gammel.
-                      Standardgrenser: 3 og 30 sekunder.
+                      Trykk på statusprikken eller Detaljer for måletider og datakvalitet.
                     </p>
                   </div>
                   <input
@@ -576,7 +581,17 @@ function App() {
                   ))}
                 </div>
                 <div className="table-scroll">
-                  <table>
+                  <table className="live-weather-table">
+                    <colgroup>
+                      <col className="station-column" />
+                      <col className="status-column" />
+                      <col />
+                      <col className="wind-column" />
+                      <col />
+                      <col />
+                      <col />
+                      <col className="actions-column" />
+                    </colgroup>
                     <thead>
                       <tr>
                         <th>Stasjon</th>
@@ -586,8 +601,7 @@ function App() {
                         <th>Luftfuktighet</th>
                         <th>Trykk</th>
                         <th>Nedbør i dag</th>
-                        <th>Måletid</th>
-                        {operator && <th />}
+                        <th>Handlinger</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -605,6 +619,7 @@ function App() {
                                 gateway={data.gateway.value}
                                 data={l}
                                 now={now}
+                                onDetails={() => setModal({ type: 'station-details', record: s })}
                               />
                             </td>
                             <td className="number">
@@ -640,17 +655,24 @@ function App() {
                                 now={now}
                               />
                             </td>
-                            <td className="small">{l.lastValidTime ? time(l.lastValidTime) : '–'}</td>
-                            {operator && (
-                              <td>
+                            <td>
+                              <div className="live-actions">
                                 <button
                                   className="text-button"
-                                  onClick={() => setModal({ type: 'station', record: s })}
+                                  onClick={() => setModal({ type: 'station-details', record: s })}
                                 >
-                                  Endre ↗
+                                  Detaljer
                                 </button>
-                              </td>
-                            )}
+                                {operator && (
+                                  <button
+                                    className="text-button"
+                                    onClick={() => setModal({ type: 'station', record: s })}
+                                  >
+                                    Endre ↗
+                                  </button>
+                                )}
+                              </div>
+                            </td>
                           </tr>
                         );
                       })}
@@ -675,6 +697,9 @@ function App() {
               onSaved={refresh}
             />
           )}
+          {page === 'packets' && (
+            <RawPackets stations={data.stations} api={api} initialStation={packetStation} />
+          )}
           {page === 'devices' && (
             <>
               <div className="device-grid">
@@ -689,6 +714,12 @@ function App() {
                           gateway={data.gateway.value}
                           data={live[station?.key]}
                           now={now}
+                          onDetails={() =>
+                            setModal({
+                              type: 'station-details',
+                              record: data.stations.find((s) => s.value.id === station.id),
+                            })
+                          }
                         />
                       </div>
                       <h2>{station?.name}</h2>
@@ -1050,6 +1081,7 @@ function App() {
               <StationForm
                 record={modal.record}
                 globalSettings={data.gateway.value}
+                lastPacket={live[modal.record?.value.key]?.lastPacket}
                 pending={pending}
                 save={(item) =>
                   action(async () => {
@@ -1061,6 +1093,21 @@ function App() {
                     }
                   })
                 }
+              />
+            )}
+            {modal.type === 'station-details' && (
+              <StationDetails
+                station={
+                  data.stations.find((s) => s.value.id === modal.record.value.id)?.value || modal.record.value
+                }
+                gateway={data.gateway.value}
+                data={live[modal.record.value.key]}
+                now={now}
+                onPackets={() => {
+                  setPacketStation(modal.record.value.id);
+                  setPage('packets');
+                  setModal(null);
+                }}
               />
             )}
             {modal.type === 'device' && (
@@ -1375,7 +1422,7 @@ function DatabaseForm({ record, pending, passwordKeys, save, test }) {
     </form>
   );
 }
-function StationForm({ record, pending, save, globalSettings }) {
+function StationForm({ record, pending, save, globalSettings, lastPacket }) {
   const [item, set] = useState({
     ...(record?.value || {
       name: '',
@@ -1485,6 +1532,7 @@ function StationForm({ record, pending, save, globalSettings }) {
       <p className="muted small">
         Råmålinger beholdes. Kalibrering gjelder nye målinger etter «Gjør gjeldende».
       </p>
+      <WindSettings item={item} set={set} lastPacket={lastPacket} />
       <TemplateEditor templates={item.templates} set={(templates) => set({ ...item, templates })} />
       <QualityRulesEditor rules={item.qualityRules} set={(qualityRules) => set({ ...item, qualityRules })} />
       <label className="checkbox">

@@ -1,6 +1,7 @@
 import { freshnessThresholds, dataStatus } from '../shared/freshness.js';
 import { latest } from './observations.js';
 import { windPresentation } from '../shared/wind.js';
+import { packetView } from './raw-packets.js';
 
 export const displayFields = {
   temperatureC: 'temp',
@@ -67,6 +68,13 @@ export function adminSnapshot(store) {
         for (const [field, target] of Object.entries(displayFields))
           result[target] = display.fields[field]?.value ?? null;
         result.sensorContact = latest(store, s.id)?.sensorContact ?? false;
+        const packetRow = store.db
+          .prepare(
+            'SELECT * FROM observations WHERE station_id=? ORDER BY received_at DESC,sequence DESC LIMIT 1',
+          )
+          .get(s.id);
+        result.lastPacketReceivedAt = packetRow ? new Date(packetRow.received_at).toISOString() : null;
+        result.lastPacket = packetRow ? packetView(JSON.parse(packetRow.body), packetRow, s) : null;
         result.wind = windPresentation(result.wlatest, result.bearing);
         return [s.key, result];
       }),

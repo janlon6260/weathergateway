@@ -6,7 +6,7 @@ Lokale tester kjøres i prosjektet, ikke i DockerHub-workflowen. DockerHub bygge
 
 | Kontroll                                     | Resultat                                                                                                                     |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Full backendkjøring med native integrasjoner | **178 bestått, 0 feil, 0 hoppet over**                                                                                       |
+| Full backendkjøring med native integrasjoner | **186 bestått, 0 feil, 0 hoppet over**                                                                                       |
 | MariaDB 11.4.13                              | Fire uendrede WD-skjemaer, alle felt, Vatne, pausevalg, sentrale innstillinger og SQL-restore bestått                        |
 | Mosquitto 2.1.2                              | mTLS, IP-SAN, ACL og varig lagringskvittering bestått                                                                        |
 | React                                        | Produksjonsbygg og Edge desktop/mobil bestått, inkludert nye arbeidsflyter og DB-utkast                                      |
@@ -21,7 +21,9 @@ Lokale tester kjøres i prosjektet, ikke i DockerHub-workflowen. DockerHub bygge
 | MAX3485 ISS                                  | Faktisk C-kode, UART-feil og rammegrenser, seksbytes værdekoding, varig MQTT-kvittering, SQL-kø og OTA-overgang bestått      |
 | Sikkerhetsprofil                             | ESP-IDF-konfigurasjon og produksjonspartisjonstabell validert; ingen sikkerhetsfirmware flashet eller eFuses endret          |
 
-Den siste fullrapporten ligger lokalt i git-ignorert `artifacts/test-results-20261021-rf243.txt`. Den omfatter også ekte MQTT med 2,5-sekunders ISS-intervall. Nettleser- og byggresultater finnes i `artifacts/access-wind-verification.json`, `artifacts/server-build-verification.json` og `artifacts/rs485-build-verification.json`. Testidentiteter og verktøy under `.tools`/`artifacts` inngår ikke i Docker-imaget. Disse resultatene gjelder lokale kontroller, ikke produksjonsgodkjenning av målutstyret. Eierens 2.4.2-logg viser fortsatt RF-feil; forbedring på fysisk radio med 2.4.3 gjenstår å kontrollere.
+Den siste fullrapporten ligger lokalt i git-ignorert `artifacts/test-results-20261021-live-details.txt`. Den omfatter også ekte MQTT med 2,5-sekunders ISS-intervall. Nettleser- og byggresultater finnes i `artifacts/access-wind-verification.json`, `artifacts/server-build-verification.json` og `artifacts/rs485-build-verification.json`. Testidentiteter og verktøy under `.tools`/`artifacts` inngår ikke i Docker-imaget. Disse resultatene gjelder lokale kontroller, ikke produksjonsgodkjenning av målutstyret. Eierens 2.4.2-logg viser fortsatt RF-feil; forbedring på fysisk radio med 2.4.3 gjenstår å kontrollere.
+
+Den nye MariaDB-regresjonen dekker test/avbryt/bekreftelse og terskelendring under utløpt ESP-test uten `UPDATE … RETURNING`. Vindprøvene dekker Pro2/Vue, nulltolkning, speiling, kalibrering etter bekreftelse og uendrede historiske data. Råpakkeprøvene dekker mottaksvindu, avviste pakker, stasjonsfilter, AD-krav og begrenset svarstørrelse. `artifacts/live-details-verification.json` dokumenterer også stabil tabell gjennom tre statusfarger, alderspopup, råpakkeinnhold, vindjustering, terskellagring og desktop/mobil uten JavaScript-feil.
 
 ## Reproduser lokale kontroller
 

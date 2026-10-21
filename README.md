@@ -10,6 +10,8 @@ Vind vises med pil mot den retningen vinden blåser og Beaufort-tall etter pilen
 
 **Kablet Vantage Pro2 ISS uten konsoll** støttes med 3,3 V MAX3485 og firmware 2.4.1: native 4800 baud / seksbytesdekoding, værdata, USB/OTA, helse og normal tilbakeføring. Protokollen har ingen kontrollsum på selve kabelen; dette vises som datakvalitet. ESP32–gateway bruker fortsatt mTLS. Se [protokollkilder, strømforsyning og bruk](docs/davis-rs485.md). Fysisk maskinvare er ikke testet her.
 
+Sanntidstabellen viser bare statusfarge; **Detaljer** samler målealder, tidspunkter og terskler. **Rådata** viser mottatte Davis-pakker siste minutt, med stasjonsfilter og dekoding før/etter kalibrering. Vindretningen kan justeres med profil, nulltolkning, speiling og monteringskorreksjon under stasjonsinnstillingene. Se [bruk og retting av MariaDB-endringstest](docs/operations-20261021.md#vindretning-og-råpakker).
+
 ## Lokal utvikling
 
 USB-flashing direkte i nettleseren og sanntidslogger via USB eller kryptert MQTT finnes under **Enheter**. Se [oppsett og bruk](docs/esp32-browser.md) for USB-pakker, nettleserkrav og firmware 2.1.0.

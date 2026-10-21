@@ -23,6 +23,7 @@ import { validitySchema } from './certificate-validity.js';
 import { logSession, readDeviceLogs } from './device-logs.js';
 import { verifyUsbFirmware } from './usb-firmware.js';
 import { adminSnapshot } from './admin-live.js';
+import { recentPackets } from './raw-packets.js';
 import { ApiClients, PublicAccess } from './api-clients.js';
 import { attachWeatherSockets } from './weather-sockets.js';
 
@@ -170,7 +171,7 @@ export function controlApp({
     asyncHandler(async (req, _res, next) => {
       req.session = await sessions.read(req, !['GET', 'HEAD'].includes(req.method), {
         touch:
-          !['/state', '/live', '/live/events'].includes(req.path) &&
+          !['/state', '/live', '/live/events', '/packets'].includes(req.path) &&
           !/\/devices\/[^/]+\/logs(?:\/session)?$/.test(req.path),
       });
       if (!['GET', 'HEAD'].includes(req.method) && !equal(req.headers['x-csrf-token'], req.session.csrf))
@@ -267,6 +268,11 @@ export function controlApp({
     });
   });
   app.get('/api/live', (_req, res) => res.json(adminSnapshot(store)));
+  app.get('/api/packets', (req, res) => {
+    const query = z.object({ stationId: id.optional() }).strict().parse(req.query);
+    if (query.stationId) store.current(`station:${query.stationId}`);
+    res.json(recentPackets(store, query.stationId));
+  });
   app.get('/api/connections', permission('administrator'), (_req, res) => res.json(apiClients.list()));
   app.post('/api/connections', permission('administrator'), (req, res) =>
     res.status(201).json(apiClients.create(req.body, req.session.principal.sid)),

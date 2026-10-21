@@ -1,14 +1,12 @@
 import React from 'react';
 import { windPresentation } from '../../shared/wind.js';
-import { ageLabel } from '../../shared/freshness.js';
 export function WindReading({ data = {}, now }) {
   const speed = data.fields?.windSpeedMs?.value ?? data.wlatest,
     from = data.fields?.windDirectionDeg?.value ?? data.bearing;
   const wind = windPresentation(
-      typeof speed === 'number' ? speed : null,
-      typeof from === 'number' ? from : null,
-    ),
-    at = data.fields?.windSpeedMs?.at;
+    typeof speed === 'number' ? speed : null,
+    typeof from === 'number' ? from : null,
+  );
   const label =
     wind.beaufort === 0
       ? 'Stille'
@@ -33,9 +31,6 @@ export function WindReading({ data = {}, now }) {
         <strong>{wind.beaufort ?? '–'}</strong>
         <small>Bft</small>
       </span>
-      {at && now - Date.parse(at) > (data.thresholds?.warningSeconds ?? 3) * 1000 && (
-        <small className="field-age">{ageLabel(at, now)}</small>
-      )}
     </div>
   );
 }

@@ -1,26 +1,32 @@
 import React from 'react';
-import { dataStatus, ageLabel, freshnessThresholds } from '../../shared/freshness.js';
-export function DataFreshness({ station, gateway, data = {}, now }) {
+import { dataStatus, freshnessThresholds } from '../../shared/freshness.js';
+export function DataFreshness({ station, gateway, data = {}, now, onDetails }) {
   const thresholds = freshnessThresholds(gateway, station),
     status = dataStatus(data.lastValidTime, now, thresholds, station.enabled);
+  const labels = {
+    green: 'Ferske data',
+    orange: 'Forsinkede data',
+    red: 'For gamle data',
+    disabled: 'Deaktivert',
+    unknown: 'Ingen data',
+  };
+  const Tag = onDetails ? 'button' : 'span';
   return (
-    <div className="data-freshness">
-      <span
-        className={`status ${status}`}
-        title={`Grønn til ${thresholds.warningSeconds} s · oransje til ${thresholds.downSeconds} s · rød etter ${thresholds.downSeconds} s`}
-      >
-        <i />
-        {status === 'disabled' ? 'Deaktivert' : ageLabel(data.lastValidTime, now)}
-      </span>
-      {data.lastValidTime && <small>Siste mottatte verdi beholdes</small>}
-    </div>
+    <Tag
+      className={`status status-dot ${status}`}
+      onClick={onDetails}
+      {...(onDetails ? { type: 'button' } : { role: 'img' })}
+      title={`${labels[status]}${onDetails ? ' – vis detaljer' : ''}`}
+      aria-label={`${station.name}: ${labels[status]}${onDetails ? '. Vis måledetaljer' : ''}`}
+    >
+      <i aria-hidden="true" />
+    </Tag>
   );
 }
 export function Measurement({ data, metric, alias, suffix, now }) {
   const field = data.fields?.[metric],
     at = field?.at || data.lastValidTime,
-    value = field?.value ?? data[alias],
-    age = at ? Math.max(0, (now - Date.parse(at)) / 1000) : null;
+    value = field?.value ?? data[alias];
   return (
     <>
       <span title={at ? `Sist målt ${new Date(at).toLocaleString('nb-NO')}` : 'Ingen mottatt verdi'}>
@@ -28,9 +34,6 @@ export function Measurement({ data, metric, alias, suffix, now }) {
           ? '–'
           : `${typeof value === 'number' ? value.toLocaleString('nb-NO', { maximumFractionDigits: 1 }) : value}${suffix}`}
       </span>
-      {age !== null && age > (data.thresholds?.warningSeconds ?? 3) && (
-        <small className="field-age">{ageLabel(at, now)}</small>
-      )}
     </>
   );
 }

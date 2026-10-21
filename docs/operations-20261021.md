@@ -25,7 +25,25 @@ Automatiske sikkerhetskopier inkluderer en transaksjonell kopi av SQL-innstillin
 
 ## Måleverdier og databaselogging
 
-Sanntidslisten beholder siste gyldige verdi per målefelt, også ved sensorbortfall og omstart av gatewayen. Den viser alder per verdi. Grønn gjelder til og med 3 sekunder, oransje over 3 sekunder og rød over 30 sekunder som standard. Tersklene finnes under Innstillinger og kan overstyres per stasjon; ellers arver stasjonen de globale verdiene. Offentlige kompatibilitetsutdata beholder sin eksisterende kontrakt.
+Sanntidslisten beholder siste gyldige verdi per målefelt, også ved sensorbortfall og omstart av gatewayen. Tabellen har faste kolonnebredder og viser bare farge i statusfeltet. Trykk på prikken eller **Detaljer** for alder, måletider, siste telemetri til gatewayen og effektive terskler. Ingen alderslinjer legges til eller fjernes når fargen endres. Grønn gjelder til og med 3 sekunder, oransje over 3 sekunder og rød over 30 sekunder som standard. Tersklene finnes under Innstillinger og kan overstyres per stasjon; ellers arver stasjonen de globale verdiene. Offentlige kompatibilitetsutdata beholder sin eksisterende kontrakt.
+
+### Retting av SQL-feil ved endringstest
+
+Kommandosekvensen bruker nå `UPDATE` etterfulgt av `SELECT` i samme låste transaksjon, i stedet for `UPDATE … RETURNING`. Sistnevnte ga `ER_PARSE_ERROR` i MariaDB 11.4.13. En terskelendring kunne også rammes når `sweep()` samtidig måtte sende en tilbakeføringskommando for en utløpt ESP-test. Den nye prøven kjører HTTP-test/avbryt for stasjon, gateway og enhet mot ekte MariaDB, og bekrefter en terskelendring mens en utløpt enhetstest rulles tilbake. Rettelsen krever bare nytt app-image, ingen manuell databaseendring eller ESP-flashing.
+
+### Vindretning og råpakker
+
+Under **Stasjoner → Endre → Vindretning fra ISS** velges automatisk modellprofil, eksplisitt Pro2-/Vue-profil, Meteostick-varianten, lineær dekoding eller topunktskalering. Nullbyte kan bety nord, manglende verdi eller profilens egen formel. Speiling skjer før eksisterende retningskorreksjon i grader. Knappene −90/+90/+180 justerer monteringskorreksjonen. Forhåndsvisningen kan bruke siste mottatte retningsbyte eller en manuelt valgt byte.
+
+Automatisk profil og null som nord bevarer tidligere oppførsel. Pro2-/Vue-formlene følger [DavisRFM69s protokollundersøkelse](https://github.com/dekay/DavisRFM69/wiki/Message-Protocol); alternativ Pro2-formel følger [Meteostick-driveren](https://github.com/matthewwall/weewx-meteostick/blob/master/bin/user/meteostick.py). Kildene beskriver ulike Pro2-skalaer og ulik nulltolkning. Ingen profil velges automatisk ut fra en antatt fysisk vindretning. Kontroller stasjonsmodell og sammenlign råbyte med en kjent retning før korreksjon. Verdien som lagres og sendes ut angir **fra-retningen**. Pilen peker 180 grader videre, altså **mot-retningen**, og vises ikke ved vindstille. Vestfra (270°) gir pil mot øst (90°).
+
+Vindvalgene lagres med stasjonsinnstillingene i MariaDB `weathergateway` og følger utkast/test/bekreftelse. De gjelder nye radio- og RS485-ISS-pakker etter bekreftelse. Eldre observasjoner omskrives ikke. Råbytes, dekodede verdier før kalibrering og kalibreringsrevisjon beholdes. Disse innstillingene endrer ikke ESP-firmware.
+
+**Rådata** viser de siste 60 sekundene etter gatewayens mottakstid, for alle stasjoner eller én valgt stasjon. Trykk på en pakke for hex/desimal-byte, pakketype, sender-ID, kanal/RSSI, CRC, retningsbyte, dekodede målinger og verdier etter kalibrering. Oversikten oppdateres hvert andre sekund og viser maksimalt 500 pakker, med melding ved avkorting. Forsinkede pakker fra ESP-køen får sin opprinnelige måletid vist separat.
+
+Pakker som gatewayen avviser vises med avvisningsstatus. Dette er MQTT-videresendte Davis-pakker; RF-pakker som ESP32 forkaster før MQTT ligger ikke i denne listen. Siste avviste RF-pakke og tellere finnes fortsatt i enhetens radiodiagnostikk. `/api/packets` krever intern AD-sesjon og finnes ikke på den offentlige tjenesten. Automatisk polling forlenger ikke en inaktiv sesjon.
+
+### Databaselogging
 
 Databaser har et globalt pausevalg og eget valg per stasjon, i tillegg til lagringsintervallet per stasjon. Pause stopper både ny kølegging og levering; eksisterende kø beholdes. Bekreftet gjenaktivering fortsetter leveringen. Databasepassord kan nå angis i panelet og lagres kryptert i `weathergateway`; eksisterende miljøvariabler er fortsatt støttet.
 
