@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { io } from 'socket.io-client';
-import { setup, observation } from './helpers.js';
+import { setup, observation, approvePublicToken } from './helpers.js';
 import { ingest, periodReport, dailyStatistics, history } from '../server/observations.js';
 import { publicApp } from '../server/app.js';
 import { trendFromPoints } from '../server/legacy-sockets.js';
@@ -62,6 +62,7 @@ test('offentlig Socket.IO bevarer hendelser og avviser feil token uten administr
   const { store, config, now } = setup(t),
     s = store.stationList()[0].value;
   ingest(store, s.id, observation(s.id, now()));
+  approvePublicToken(store, config, 'x'.repeat(40));
   const service = publicApp({ store, config: { ...config, role: 'public', publicToken: 'x'.repeat(40) } }),
     server = createServer(service.app),
     stop = service.attachSockets(server);

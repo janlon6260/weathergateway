@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
-import { setup, directory } from './helpers.js';
+import { setup, directory, approvePublicToken } from './helpers.js';
 import { controlApp, publicApp } from '../server/app.js';
 import { Rejected } from '../server/store.js';
 
@@ -95,6 +95,7 @@ test('ugyldig AD-kandidat blir ikke aktivert', async (t) => {
 test('offentlig Express-app har ingen administrative ruter', async (t) => {
   const { store, config } = setup(t);
   config.publicToken = 'x'.repeat(40);
+  approvePublicToken(store, config, config.publicToken);
   const { app } = publicApp({ store, config: { ...config, role: 'public' } });
   await request(app).get('/weather/current').expect(401);
   await request(app).get('/weather/current').set('Authorization', `Bearer ${config.publicToken}`).expect(200);

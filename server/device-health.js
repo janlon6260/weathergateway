@@ -47,6 +47,17 @@ export const deviceHealthSchema = z
     cpuFrequencyMhz: counter,
     sensorContact: z.boolean().optional(),
     wifiChannel: z.number().int().min(1).max(14).optional(),
+    rs485: z
+      .object({
+        captureOnly: z.literal(true),
+        baud: z.number().int().positive(),
+        bytesReceived: counter,
+        uartErrors: counter,
+        overflows: counter,
+        bytesOmitted: counter,
+      })
+      .strict()
+      .optional(),
     security: z
       .object({
         chipRevision: z.number().int().nonnegative(),

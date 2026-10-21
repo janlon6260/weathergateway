@@ -8,7 +8,7 @@ import { Store } from '../server/store.js';
 import { publicProjection } from '../server/public-projection.js';
 import { prepareRuntime } from '../server/runtime-files.js';
 import { ingest } from '../server/observations.js';
-import { setup, observation } from './helpers.js';
+import { setup, observation, approvePublicToken } from './helpers.js';
 
 function denyDirectoryWrites(path) {
   if (process.platform === 'win32') {
@@ -95,7 +95,7 @@ test(
   'actual public process starts after control closes its projection and serves the protected weather API',
   { timeout: 15000 },
   async (t) => {
-    const { store, now } = setup(t),
+    const { store, now, config } = setup(t),
       station = store.stationList()[0].value;
     ingest(store, station.id, observation(station.id, now()));
     prepareRuntime(store);
@@ -116,6 +116,7 @@ test(
         WG_BIND: '127.0.0.1',
         WG_ALLOW_LOCAL_HTTP: 'true',
         WG_READ_TOKEN: token,
+        WG_READ_TOKEN_FILE: config.publicAccessFile.replace(/socket-clients\.json$/, 'read-token'),
         PORT: String(port),
       },
     });
@@ -136,6 +137,18 @@ test(
       }
       assert.equal(response?.status, 200, output);
       assert.equal((await fetch(`http://127.0.0.1:${port}/weather/current`)).status, 401);
+      assert.equal(
+        (
+          await fetch(`http://127.0.0.1:${port}/weather/current`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        ).status,
+        401,
+      );
+      // The real public process has a real clock. Explicit approval must carry
+      // a fresh control lease rather than setup's historical observation clock.
+      store.clock = Date.now;
+      approvePublicToken(store, config, token);
       const weather = await fetch(`http://127.0.0.1:${port}/weather/current`, {
         headers: { Authorization: `Bearer ${token}` },
       });

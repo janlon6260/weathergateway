@@ -188,7 +188,11 @@ export const databaseSchema = z
       .string()
       .regex(/^WG_DB_PASSWORD(?:_[A-Z0-9_]{1,48})?$/)
       .default('WG_DB_PASSWORD'),
-    passwordSecret: z.string().regex(/^weather-db:[0-9a-f-]{36}$/).nullable().default(null),
+    passwordSecret: z
+      .string()
+      .regex(/^weather-db:[0-9a-f-]{36}$/)
+      .nullable()
+      .default(null),
     stationKey: z.string().min(1).max(100),
     stationNameColumn: columnName.nullable().default(null),
     intervalSeconds: z.number().int().min(1).max(86400).default(60),
@@ -276,7 +280,18 @@ const serialDeviceSchema = z
   })
   .strict()
   .refine((v) => v.uartRx !== v.uartTx, 'RX og TX må være forskjellige');
-export const deviceSchema = z.union([radioDeviceSchema, serialDeviceSchema]);
+export const rs485CaptureDeviceSchema = z
+  .object({
+    ...deviceBase,
+    interface: z.literal('davis-iss-rs485-capture'),
+    uartRx: gpio,
+    rs485De: gpio,
+    rs485Re: gpio,
+    uartBaud: z.enum(['1200', '2400', '4800', '9600', '19200', '38400']),
+  })
+  .strict()
+  .refine((v) => new Set([v.uartRx, v.rs485De, v.rs485Re]).size === 3, 'RS-485-pinnene må være forskjellige');
+export const deviceSchema = z.union([radioDeviceSchema, serialDeviceSchema, rs485CaptureDeviceSchema]);
 export function defaultDevice(stationId, publicOrigin, environment) {
   return radioDeviceSchema.parse({
     stationId,

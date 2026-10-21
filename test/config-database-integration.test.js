@@ -11,6 +11,7 @@ import { observation } from './helpers.js';
 import { ingest } from '../server/observations.js';
 import { startBackup, finishBackups } from '../server/backups.js';
 import Database from 'better-sqlite3';
+import { ApiClients } from '../server/api-clients.js';
 test(
   'real MariaDB is authoritative for settings, changes, audit and secrets; weather remains separate and rollback/restart retain state',
   { skip: !process.env.WG_MARIADB_BIN, timeout: 90000 },
@@ -82,6 +83,16 @@ test(
       });
       initialize(store, cfg.defaults);
       assert.equal(store.db.backend, 'mariadb');
+      const apiClients = new ApiClients(store, {
+        ...cfg,
+        publicAccessFile: join(root, 'policies', 'socket-clients.json'),
+      });
+      const approval = apiClients.create(
+        { name: 'SQL persisted approval', allStations: false, stationIds: [id] },
+        'admin',
+      );
+      assert.equal(store.db.local.prepare('SELECT COUNT(*) AS n FROM api_clients').get().n, 0);
+      assert.ok(!JSON.stringify(apiClients.list()).includes(approval.token));
       assert.equal(store.db.local.prepare('SELECT COUNT(*) AS n FROM configuration').get().n, 0);
       const current = store.current(`station:${id}`),
         draft = store.propose(
@@ -186,6 +197,12 @@ test(
       );
       assert.ok(
         Number(store.db.prepare("SELECT value FROM meta WHERE key='command_sequence'").get().value) > 1e12,
+      );
+      assert.equal(
+        JSON.parse(
+          store.db.prepare('SELECT payload FROM api_clients WHERE id=?').get(approval.client.id).payload,
+        ).name,
+        'SQL persisted approval',
       );
       assert.equal(store.db.local.prepare('SELECT COUNT(*) AS n FROM configuration').get().n, 0);
     } catch (error) {

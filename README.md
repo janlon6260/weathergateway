@@ -6,6 +6,10 @@ Implementert: React-panel med sanntidsliste, LDAPS/roller, stasjons-/enhetsadmin
 
 **Implementasjonen er lokalt verifisert; produksjonsinstallasjon og fysisk maskinvare er ikke godkjent her.** Se [leveransestatus](docs/release-status.md) og [akseptanseprøvene](docs/production-acceptance.md). Identisk oppførsel for alle Weather Display-funksjoner må ikke antas. Manglende trykk gir manglende trykkavhengige beregninger, inkludert referanse-ET.
 
+Vind vises med pil mot den retningen vinden blåser og Beaufort-tall etter pilen. [Socket.IO-grensesnittet](docs/socket-api.md) leverer alle tilgjengelige værfelt, numeriske vinddata og filtrering på navn/ID. Hvert tredjepartssystem må godkjennes under **Tilkoblinger**, med egen nøkkel, stasjonsvalg og tidsbegrenset eller evigvarende godkjenning. Ved oppgradering må eksisterende Sunnmørsvær-lesetoken også godkjennes her før det virker igjen.
+
+En egen **MAX3485 / kablet ISS-opptaksprofil** kan bygges og flashes fra panelet. Den logger rådata via USB/MQTT og rapporterer UART-helse. **Værdatadekoderen for direkte kablet ISS uten konsoll er ikke ferdig**, fordi rammeformat og kontrollsum ennå ikke er verifisert. Se [opptak, koblingsgrenser og gjenstående arbeid](docs/davis-rs485.md).
+
 ## Lokal utvikling
 
 USB-flashing direkte i nettleseren og sanntidslogger via USB eller kryptert MQTT finnes under **Enheter**. Se [oppsett og bruk](docs/esp32-browser.md) for USB-pakker, nettleserkrav og firmware 2.1.0.
@@ -45,7 +49,8 @@ Miljøknappen åpner den andre, selvstendige installasjonen. Utviklingsendringer
 
 - [Arkitektur](docs/architecture.md), [sikkerhet](docs/security.md) og [MQTT/ESP32](docs/device-protocol.md).
 - [Beregninger og kilder](docs/calculations.md), [Sunnmørsvær-kontrakt](docs/sunnmorsver-compatibility.md) og [Weather Display-matrisen](docs/weather-display-scope.md).
-- [Firmwarebygg](firmware/README.md), [ISS-radio og koblingstabell](docs/davis-radio.md), [leveransestatus og testgrenser](docs/release-status.md).
+- [Firmwarebygg](firmware/README.md), [ISS-radio og koblingstabell](docs/davis-radio.md), [kablet ISS-opptak](docs/davis-rs485.md), [leveransestatus og testgrenser](docs/release-status.md).
+- [Socket.IO, vindpiler og godkjente tredjepartstilkoblinger](docs/socket-api.md).
 - [Signert OTA og sertifikatvedlikehold](docs/firmware-lifecycle.md), [produksjonsakseptanse](docs/production-acceptance.md).
 - [Sertifikater fra adminpanelet og Docker-oppstart uten sertifikatfiler](docs/certificates.md).
 

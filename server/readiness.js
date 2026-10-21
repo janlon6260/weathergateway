@@ -69,6 +69,11 @@ export function readiness(store, config) {
   add('firmwareTrust', 'ECDSA-verifikasjonsnøkkel for firmware', trustedKey);
   const databases = databaseStatus(store);
   for (const station of stations) {
+    add(
+      `interface:${station.id}`,
+      `${station.name}: verifiserbar værdataprofil`,
+      store.confirmedValue(`device:${station.id}`).interface !== 'davis-iss-rs485-capture',
+    );
     const row = store.db
         .prepare(
           'SELECT observed_at,body FROM observations WHERE station_id=? ORDER BY observed_at DESC LIMIT 1',

@@ -5,7 +5,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import request from 'supertest';
-import { setup, directory } from './helpers.js';
+import { setup, directory, approvePublicToken } from './helpers.js';
 import { hash } from '../server/store.js';
 import { controlApp, publicApp } from '../server/app.js';
 import {
@@ -123,19 +123,24 @@ test('USB flasher checks eFuses before a RAM stub, verifies flash readback and a
   let corrupted = false,
     secured = false;
   class Transport {
-    packets=[];
-    async read(){return this.packets.shift();}
-    async write(){}
+    packets = [];
+    async read() {
+      return this.packets.shift();
+    }
+    async write() {}
     async disconnect() {
       events.push('disconnect');
     }
   }
   class Loader {
-    constructor({transport}){this.transport=transport;}
-    ESP_READ_FLASH=0xd2;
-    async checkCommand(_name,_command,packet){
-      const address=new DataView(packet.buffer).getUint32(0,true);
-      this.transport.packets=[corrupted?new Uint8Array(1024):memory.get(address),new Uint8Array(16)];return 0;
+    constructor({ transport }) {
+      this.transport = transport;
+    }
+    ESP_READ_FLASH = 0xd2;
+    async checkCommand(_name, _command, packet) {
+      const address = new DataView(packet.buffer).getUint32(0, true);
+      this.transport.packets = [corrupted ? new Uint8Array(1024) : memory.get(address), new Uint8Array(16)];
+      return 0;
     }
     chip = { CHIP_NAME: 'ESP32' };
     romBaudrate = 115200;
@@ -174,13 +179,16 @@ test('USB flasher checks eFuses before a RAM stub, verifies flash readback and a
       },
     },
     loadFlasher: async () => ({ Transport, ESPLoader: Loader }),
-    confirmBoot:async()=>{events.push('boot');return true;},
+    confirmBoot: async () => {
+      events.push('boot');
+      return true;
+    },
   });
   const authorize = async () => events.push('authorize');
   await controller.flash(bundle, { authorize });
   assert.ok(events.indexOf('efuse') < events.indexOf('stub'));
   assert.ok(events.indexOf('authorize') < events.indexOf('write'));
-  assert.deepEqual(events.slice(-3), ['reset', 'disconnect','boot']);
+  assert.deepEqual(events.slice(-3), ['reset', 'disconnect', 'boot']);
   assert.equal(controller.mode, 'disconnected');
   events.length = 0;
   corrupted = true;
@@ -424,6 +432,7 @@ test('device tooling endpoints enforce AD roles, CSRF and private admin-only exp
       .expect(role === 'administrator' ? 200 : 403);
   }
   const token = 'device-tools-readonly-test-token';
+  approvePublicToken(s.store, s.config, token);
   const { app } = publicApp({
     store: s.store,
     config: { ...s.config, publicToken: token, publicTokenFile: null },

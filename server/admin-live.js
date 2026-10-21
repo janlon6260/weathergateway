@@ -1,5 +1,6 @@
 import { freshnessThresholds, dataStatus } from '../shared/freshness.js';
 import { latest } from './observations.js';
+import { windPresentation } from '../shared/wind.js';
 
 export const displayFields = {
   temperatureC: 'temp',
@@ -66,6 +67,7 @@ export function adminSnapshot(store) {
         for (const [field, target] of Object.entries(displayFields))
           result[target] = display.fields[field]?.value ?? null;
         result.sensorContact = latest(store, s.id)?.sensorContact ?? false;
+        result.wind = windPresentation(result.wlatest, result.bearing);
         return [s.key, result];
       }),
   );

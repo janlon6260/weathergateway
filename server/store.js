@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS telemetry_rejections(station_id TEXT NOT NULL,boot_id
 CREATE TABLE IF NOT EXISTS device_status(station_id TEXT PRIMARY KEY,received_at INTEGER NOT NULL,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS station_display(station_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings_secrets(name TEXT PRIMARY KEY,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS api_clients(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS notification_state(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS notification_outbox(id TEXT PRIMARY KEY,created_at INTEGER NOT NULL,next_attempt INTEGER NOT NULL,attempts INTEGER NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,sent_at INTEGER,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS notification_pending ON notification_outbox(state,next_attempt);

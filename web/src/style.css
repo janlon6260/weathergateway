@@ -1110,3 +1110,67 @@ textarea {
 .notification-settings details textarea {
   width: 100%;
 }
+.wind-reading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wind-direction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--teal, #087f83);
+  white-space: nowrap;
+}
+.wind-direction svg {
+  fill: currentColor;
+  flex-shrink: 0;
+}
+.wind-direction small {
+  font-size: 10px;
+}
+.wind-reading > .field-age {
+  flex-basis: 100%;
+}
+.access-token {
+  display: block;
+  margin: 0 20px 20px;
+  padding: 16px;
+}
+.access-token textarea {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  font:
+    12px Consolas,
+    monospace;
+}
+.access-token .actions {
+  flex-wrap: wrap;
+}
+.access-token .actions button {
+  font-size: 12px;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid #b9d8d9;
+}
+.api-clients td .actions {
+  flex-wrap: wrap;
+}
+.api-clients td {
+  vertical-align: top;
+}
+.api-clients table {
+  min-width: 1000px;
+}
+.api-clients td:last-child {
+  min-width: 220px;
+}
+.api-clients td .actions {
+  margin-top: 0;
+  max-width: 270px;
+}
+.api-connection-help {
+  padding: 22px;
+}

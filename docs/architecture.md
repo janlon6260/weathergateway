@@ -9,9 +9,11 @@ Hvert miljø har fire containere:
 | control  | Privat admin/API, LDAPS, endringsmotor, sertifikatutsteder. Eget nettverk.                                |
 | worker   | MQTT-klient med eget klientsertifikat, validering, beregning, eksport, watchdog og offentlig datakopi.    |
 | broker   | Mosquitto med TLS/mTLS og eksplisitte emnetilganger per sertifikat.                                       |
-| public   | Egen HTTP/Socket.IO-applikasjon uten administrasjonsruter. Separat lesekopi av værdata og eget lesetoken. |
+| public   | Egen HTTP/Socket.IO-applikasjon uten administrasjonsruter. Separat lesekopi av værdata og avledede nøkkelhasher/godkjenninger. |
 
 `public` får bare volumet `<miljø>/public` lesbart. Kopien inneholder stasjonsmetadata, siste observasjon, opptil tre timers trendmålinger, døgn-/timeaggregater og eksportfiler. AD, sesjoner, kommandoer, råpakker og CA-/enhetsnøkler kopieres ikke. Kopien oppdateres hvert andre sekund og kan regenereres fra hoveddatabasen. Ikke monter hovedvolumet i public-tjenesten.
+
+Control forvalter tredjepartsgodkjenninger i MariaDB `api_clients` og publiserer en minimal policy i den lesemonterte `roles/public`-mappen. Public har ingen SQL-legitimasjon. Policyen inneholder nøkkelhasher og stasjons-/tids-/Origin-grenser og må fornyes innen 15 sekunder. Gamle plaintext-lesetoken fjernes fra public-mappen; originalen beholdes hos control for eksplisitt godkjenning ved oppgradering. [Socket.IO-kontrakten](socket-api.md) beskriver abonnement, filtrering og løpende kontroll.
 
 Observasjoner identifiseres av `(stationId, bootId, sequence)`. MQTT-duplikater endrer ikke statistikken. Kildetid og mottakstid bevares hver for seg; sen ankomst erstatter ikke nyere sanntidsdata. Rå Davis-pakker med CRC bevares i hoveddatabasen og JSONL-arkivet. Beregnings- og kalibreringsversjon følger observasjonen.
 

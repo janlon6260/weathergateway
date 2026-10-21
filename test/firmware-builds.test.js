@@ -15,6 +15,8 @@ import { proposeFirmware } from '../server/firmware-updates.js';
 import { handleAck, firmwareHealth } from '../server/worker.js';
 import { ingest } from '../server/observations.js';
 import { controlApp } from '../server/app.js';
+import { deviceProfile } from '../shared/device-hardware.js';
+import { readiness } from '../server/readiness.js';
 
 async function fixture(t) {
   const s = setup(t),
@@ -112,13 +114,64 @@ function result(s, build) {
   s.builds.poll();
   return s.builds.row(build.id);
 }
+
+test('MAX3485 capture builds bind selected GPIOs and station to signed USB, refuse OTA and Vue, and do not pass production weather readiness', async (t) => {
+  const s = await fixture(t);
+  const vueProfile = deviceProfile(
+    s.store.confirmedValue(`device:${s.stationId}`),
+    'davis-iss-rs485-capture',
+  );
+  await assert.rejects(
+    s.builds.start(s.stationId, { ...input, configuration: vueProfile }, 'admin'),
+    /Vantage Pro2/,
+  );
+  s.stationId = s.store.stationList().find((r) => r.value.model === 'Davis Vantage Pro2').value.id;
+  const configuration = {
+    ...deviceProfile(s.store.confirmedValue(`device:${s.stationId}`), 'davis-iss-rs485-capture'),
+    uartBaud: '4800',
+    uartRx: 17,
+  };
+  await assert.rejects(
+    s.builds.start(s.stationId, { ...input, configuration, purpose: 'ota' }, 'admin'),
+    /bare installeres via USB/,
+  );
+  await assert.rejects(
+    s.builds.start(
+      s.stationId,
+      { ...input, configuration: { ...configuration, stationId: vueProfile.stationId } },
+      'admin',
+    ),
+    /annen stasjon/,
+  );
+  const build = await s.builds.start(s.stationId, { ...input, configuration }, 'admin');
+  const staged = JSON.parse(readFileSync(join(s.builds.root, build.id, 'request.json'), 'utf8'));
+  assert.ok(staged.files['provisioning.h'].includes('davis-iss-rs485-capture'));
+  assert.equal(result(s, build).state, 'ready');
+  const bundle = s.builds.usb(build.id);
+  await prepareUsbBundle(bundle, s.stationId, s.store.environment);
+  s.builds.usbComplete(build.id, 'admin');
+  const saved = s.store.confirmedValue(`device:${s.stationId}`);
+  assert.equal(saved.uartBaud, '4800');
+  assert.equal(saved.uartRx, 17);
+  assert.equal(saved.mqttHost, input.mqttHost);
+  assert.equal(
+    readiness(s.store, s.config).checks.find((c) => c.id === `interface:${s.stationId}`).passed,
+    false,
+  );
+});
 test('server build retains encrypted identity, signs USB and OTA, keeps passwords out of database/status/audit and rejects stale artifacts', async (t) => {
   const s = await fixture(t),
     build = await s.builds.start(s.stationId, input, 'admin');
   const identity = s.builds.identity(s.stationId),
     staged = join(s.builds.root, build.id, 'request.json');
   assert.ok(existsSync(staged));
-  assert.equal(s.store.db.prepare('SELECT payload FROM settings_secrets WHERE name=?').get(`firmware:${s.stationId}`).payload.includes(input.wifiPassword),false);
+  assert.equal(
+    s.store.db
+      .prepare('SELECT payload FROM settings_secrets WHERE name=?')
+      .get(`firmware:${s.stationId}`)
+      .payload.includes(input.wifiPassword),
+    false,
+  );
   const header = JSON.parse(readFileSync(staged, 'utf8')).files['provisioning.h'];
   assert.ok(header.includes(JSON.stringify(input.wifiPassword)));
   assert.equal(result(s, build).state, 'ready');

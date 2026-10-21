@@ -46,6 +46,7 @@ export const firmwareBuildInput = z
     wifiPassword: wifiText.optional(),
     purpose: z.enum(['usb', 'ota']),
     validity: validitySchema.optional(),
+    configuration: deviceSchema.optional(),
   })
   .strict();
 
@@ -88,16 +89,26 @@ export class FirmwareBuilds {
       cipher = createCipheriv('aes-256-gcm', this.key(), nonce);
     cipher.setAAD(Buffer.from(`${this.store.environment}:${stationId}`));
     const body = Buffer.concat([cipher.update(JSON.stringify(identity)), cipher.final()]);
-    this.store.db.prepare('INSERT INTO settings_secrets VALUES (?,?) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload').run(`firmware:${stationId}`,Buffer.concat([nonce,cipher.getAuthTag(),body]).toString('base64'));
+    this.store.db
+      .prepare(
+        'INSERT INTO settings_secrets VALUES (?,?) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload',
+      )
+      .run(`firmware:${stationId}`, Buffer.concat([nonce, cipher.getAuthTag(), body]).toString('base64'));
   }
   identity(stationId) {
     const path = this.vaultPath(stationId);
-    let row=this.store.db.prepare('SELECT payload FROM settings_secrets WHERE name=?').get(`firmware:${stationId}`);
-    if(!row&&existsSync(path)){
-      this.store.db.prepare('INSERT INTO settings_secrets VALUES (?,?)').run(`firmware:${stationId}`,readFileSync(path,'utf8'));
-      row=this.store.db.prepare('SELECT payload FROM settings_secrets WHERE name=?').get(`firmware:${stationId}`);
+    let row = this.store.db
+      .prepare('SELECT payload FROM settings_secrets WHERE name=?')
+      .get(`firmware:${stationId}`);
+    if (!row && existsSync(path)) {
+      this.store.db
+        .prepare('INSERT INTO settings_secrets VALUES (?,?)')
+        .run(`firmware:${stationId}`, readFileSync(path, 'utf8'));
+      row = this.store.db
+        .prepare('SELECT payload FROM settings_secrets WHERE name=?')
+        .get(`firmware:${stationId}`);
     }
-    if(!row)return null;
+    if (!row) return null;
     const data = Buffer.from(row.payload, 'base64'),
       cipher = createDecipheriv('aes-256-gcm', this.key(false), data.subarray(0, 12));
     cipher.setAAD(Buffer.from(`${this.store.environment}:${stationId}`));
@@ -256,10 +267,18 @@ export class FirmwareBuilds {
     const values = firmwareBuildInput.parse(input);
     const current = this.store.confirmedValue(`device:${stationId}`),
       configuration = deviceSchema.parse({
-        ...current,
+        ...(values.configuration || current),
         mqttHost: values.mqttHost,
         mqttPort: values.mqttPort,
       });
+    if (configuration.stationId !== stationId)
+      throw new Rejected('Maskinvareoppsettet tilhører en annen stasjon', 400);
+    if (configuration.interface === 'davis-iss-rs485-capture') {
+      if (this.station(stationId).model !== 'Davis Vantage Pro2')
+        throw new Rejected('Direkte kablet ISS krever Vantage Pro2', 400);
+      if (values.purpose !== 'usb')
+        throw new Rejected('Uverifisert RS-485-opptaksprofil kan bare installeres via USB', 409);
+    }
     const serverCert = new X509Certificate(readFileSync(join(this.config.certificateRoot, 'server.pem')));
     if (
       !(isIP(values.mqttHost) ? serverCert.checkIP(values.mqttHost) : serverCert.checkHost(values.mqttHost))
@@ -524,7 +543,7 @@ export class FirmwareBuilds {
       join(this.store.stationDirectory(row.station_id, 'firmware'), `${row.id}.usb-flash.json`),
     );
   }
-  usbComplete(buildId, actor, {bootConfirmed=false}={}) {
+  usbComplete(buildId, actor, { bootConfirmed = false } = {}) {
     const row = this.row(buildId);
     this.usb(buildId);
     const p = JSON.parse(row.payload);

@@ -61,10 +61,8 @@ export function humidex(t, dew) {
   if (!valid(t, dew) || t < 20 || dew < -100 || dew > t) return null;
   return t + (5 / 9) * (6.11 * Math.exp(5417.753 * (1 / 273.16 - 1 / (dew + 273.15))) - 10);
 }
-export function beaufort(windMs) {
-  if (!valid(windMs) || windMs < 0) return null;
-  return [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7].filter((v) => windMs >= v).length;
-}
+import { beaufort } from '../shared/wind.js';
+export { beaufort };
 export function vectorDirection(samples) {
   const good = samples.filter((x) => valid(x.speed, x.direction) && x.speed > 0);
   if (!good.length) return null;

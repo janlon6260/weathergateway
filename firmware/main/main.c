@@ -25,6 +25,7 @@
 #include "mbedtls/base64.h"
 #include "psa/crypto.h"
 #include "davis_uart.h"
+#include "davis_rs485.h"
 #include "davis_rfm69.h"
 #include "wg_ota.h"
 #include "wg_spool.h"
@@ -55,7 +56,7 @@ typedef struct {
   int64_t deadline, last_epoch;
   volatile uint8_t pending;
 } persistent_t;
-typedef struct { char host[254]; int port, seconds, rx, tx, baud; bool radio; davis_radio_config_t rf; } config_t;
+typedef struct { char host[254]; int port, seconds, rx, tx, baud, de, re; bool radio,capture_rs485; davis_radio_config_t rf; } config_t;
 typedef struct { char json[COMMAND_SIZE]; uint8_t kind; } command_t;
 static persistent_t state;
 static config_t current;
@@ -96,7 +97,8 @@ static bool parse_config(const char *json, config_t *out) {
   cJSON *o = cJSON_Parse(json); if (!cJSON_IsObject(o)) { cJSON_Delete(o); return false; }
   const char *interface = text(o, "interface");
   out->radio = interface && !strcmp(interface, "davis-iss-rfm69");
-  if (cJSON_GetArraySize(o) != (out->radio ? 13 : 7)) { cJSON_Delete(o); return false; }
+  out->capture_rs485=interface&&!strcmp(interface,"davis-iss-rs485-capture");
+  if (cJSON_GetArraySize(o) != (out->radio ? 13 : out->capture_rs485?9:7)) { cJSON_Delete(o); return false; }
   const char *station = text(o, "stationId"), *host = text(o, "mqttHost"), *baud = text(o, "uartBaud");
   bool valid = station && !strcmp(station, WG_STATION_ID) && copy_text(out->host, sizeof(out->host), host) &&
     integer(o, "mqttPort", 1, 65535, &out->port) && integer(o, "sampleSeconds", 1, 300, &out->seconds);
@@ -111,6 +113,9 @@ static bool parse_config(const char *json, config_t *out) {
       if (!radio_pin(values[i])) valid = false;
       for (int j = 0; j < i; j++) if (values[i] == values[j]) valid = false;
     }
+  } else if(valid&&out->capture_rs485){
+    valid=baud&&integer(o,"uartRx",0,33,&out->rx)&&integer(o,"rs485De",0,33,&out->de)&&integer(o,"rs485Re",0,33,&out->re);
+    if(valid){out->baud=atoi(baud);valid=radio_pin(out->rx)&&radio_pin(out->de)&&radio_pin(out->re)&&out->rx!=out->de&&out->rx!=out->re&&out->de!=out->re&&(!strcmp(baud,"1200")||!strcmp(baud,"2400")||!strcmp(baud,"4800")||!strcmp(baud,"9600")||!strcmp(baud,"19200")||!strcmp(baud,"38400"));}
   } else if (valid) {
     valid = baud && integer(o, "uartRx", 0, 39, &out->rx) && integer(o, "uartTx", 0, 39, &out->tx);
     if (valid) { out->baud = atoi(baud); valid = pin(out->rx) && pin(out->tx) && out->rx != out->tx && (!strcmp(baud,"19200") || !strcmp(baud,"9600") || !strcmp(baud,"2400") || !strcmp(baud,"1200")); }
@@ -164,8 +169,9 @@ static void reconnect(void) {
   connected = false; new_connection = false;
   telemetry_acked = false; telemetry_message_id = -1;
   if (!parse_config(configuration_json(), &current)) abort();
-  davis_stop(); davis_radio_stop();
+  davis_stop(); davis_radio_stop();davis_rs485_stop();
   if (current.radio) (void)davis_radio_init(&current.rf);
+  else if(current.capture_rs485)davis_rs485_start(current.rx,current.de,current.re,current.baud);
   else davis_init(current.rx, current.tx, current.baud);
   snprintf(mqtt_uri, sizeof(mqtt_uri), "mqtts://%s:%d", current.host, current.port);
   esp_mqtt_client_config_t config = {
@@ -287,7 +293,7 @@ static void emit_record(const wg_spool_record_t *record) {
     struct timeval tv; gettimeofday(&tv,NULL);
     epoch_ms = (int64_t)tv.tv_sec*1000+tv.tv_usec/1000-(esp_timer_get_time()-record->monotonic_us)/1000LL; mapped = true;
   } else if (!epoch_ms) undated = true;
-  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.3.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
+  cJSON *o = cJSON_CreateObject(); cJSON_AddNumberToObject(o,"version",1); cJSON_AddStringToObject(o,"stationId",WG_STATION_ID); cJSON_AddStringToObject(o,"bootId",record->boot_id); cJSON_AddNumberToObject(o,"sequence",record->sequence); cJSON_AddStringToObject(o,"firmware","wg-esp32-2.4.0"); cJSON_AddBoolToObject(o,"sensorContact",record->packet_size > 0); cJSON_AddObjectToObject(o,"measurements"); cJSON_AddStringToObject(o,"configurationHash",record->configuration_hash);
   if (record->release_id[0]) cJSON_AddStringToObject(o,"firmwareReleaseId",record->release_id);
   if (wg_credentials_id()[0]) cJSON_AddStringToObject(o,"certificateId",wg_credentials_id());
   if (undated) { cJSON_AddNumberToObject(o,"monotonicUs",record->monotonic_us); cJSON_AddStringToObject(o,"reason","clock-unavailable-before-reboot"); }
@@ -330,7 +336,7 @@ static void configuration_watchdog(void *unused) {
   }
 }
 void app_main(void) {
-  esp_log_level_set("*", ESP_LOG_WARN); esp_log_level_set(TAG, ESP_LOG_INFO); esp_log_level_set("davis_radio", ESP_LOG_INFO);
+  esp_log_level_set("*", ESP_LOG_WARN); esp_log_level_set(TAG, ESP_LOG_INFO); esp_log_level_set("davis_radio", ESP_LOG_INFO); esp_log_level_set("davis_rs485", ESP_LOG_INFO);
   setenv("TZ", "UTC0", 1); tzset();
   if (psa_crypto_init() != PSA_SUCCESS) abort();
   ESP_ERROR_CHECK(nvs_flash_init()); ESP_ERROR_CHECK(nvs_open("gateway", NVS_READWRITE, &nvs));
@@ -371,7 +377,7 @@ void app_main(void) {
   uint8_t random[16]; esp_fill_random(random, sizeof(random)); random[6] = (random[6] & 15) | 64; random[8] = (random[8] & 63) | 128;
   snprintf(boot_id, sizeof(boot_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", random[0],random[1],random[2],random[3],random[4],random[5],random[6],random[7],random[8],random[9],random[10],random[11],random[12],random[13],random[14],random[15]);
   wg_logs_init(boot_id);
-  ESP_LOGI(TAG, "WeatherGateway 2.3.0 started; station %s", WG_STATION_ID);
+  ESP_LOGI(TAG, "WeatherGateway 2.4.0 started; station %s", WG_STATION_ID);
   snprintf(command_topic, sizeof(command_topic), "wg/v1/%s/stations/%s/commands", WG_ENVIRONMENT, WG_STATION_ID); snprintf(telemetry_topic, sizeof(telemetry_topic), "wg/v1/%s/stations/%s/telemetry", WG_ENVIRONMENT, WG_STATION_ID); snprintf(ack_topic, sizeof(ack_topic), "wg/v1/%s/stations/%s/acks", WG_ENVIRONMENT, WG_STATION_ID); snprintf(status_topic, sizeof(status_topic), "wg/v1/%s/stations/%s/status", WG_ENVIRONMENT, WG_STATION_ID);
   snprintf(firmware_topic,sizeof(firmware_topic),"wg/v1/%s/stations/%s/firmware-data",WG_ENVIRONMENT,WG_STATION_ID);
   snprintf(receipt_topic,sizeof(receipt_topic),"wg/v1/%s/stations/%s/telemetry-receipt",WG_ENVIRONMENT,WG_STATION_ID);
@@ -387,10 +393,11 @@ void app_main(void) {
     bool reconnected = new_connection; new_connection = false;
     if (reconnected && state.last_command[0]) ack(state.last_command, state.last_status);
     if (xQueueReceive(commands, &command, 0) == pdTRUE) { if (command.kind) { cJSON *o = cJSON_Parse(command.json); if (o) { if (command.kind == 1) wg_ota_data(o); else receipt(o); cJSON_Delete(o); } } else process_command(command.json); }
-    bool got_packet; int channel = 0, rssi = 0;
-    if (current.radio) got_packet = davis_radio_poll(now / 1000, packet, &channel, &rssi);
+    bool got_packet=false; int channel = 0, rssi = 0;
+    if(current.capture_rs485)davis_rs485_poll(now/1000);
+    else if (current.radio) got_packet = davis_radio_poll(now / 1000, packet, &channel, &rssi);
     else got_packet = davis_poll(now / 1000, current.seconds, packet);
-    bool failed = current.radio ? davis_radio_failed(now / 1000) : davis_failed();
+    bool failed = current.capture_rs485 ? true : current.radio ? davis_radio_failed(now / 1000) : davis_failed();
     if (got_packet) {
       received_packets++;last_iss_packet=now;
       publish(packet, current.radio ? 10 : 99, channel, rssi);
@@ -407,6 +414,7 @@ void app_main(void) {
     if (connected && (reconnected || now-last_device_status >= 5000000LL)) {
       cJSON *o = cJSON_CreateObject(); cJSON_AddBoolToObject(o,"online",true); cJSON_AddNumberToObject(o,"pending",wg_spool_pending()); cJSON_AddNumberToObject(o,"capacity",wg_spool_capacity()); cJSON_AddNumberToObject(o,"dropped",wg_spool_dropped()); cJSON_AddBoolToObject(o,"clockSynchronized",time(NULL) >= WG_MINIMUM_EPOCH);
       wg_health_fields(o);cJSON_AddNumberToObject(o,"heartbeatSequence",++heartbeat_sequence);
+      davis_rs485_health(o);
       cJSON_AddNumberToObject(o,"bootCount",boot_count);cJSON_AddNumberToObject(o,"cpuFrequencyMhz",CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
       cJSON_AddNumberToObject(o,"wifiReconnects",wifi_reconnects);cJSON_AddNumberToObject(o,"mqttReconnects",mqtt_reconnects);
       cJSON_AddNumberToObject(o,"packetsReceived",received_packets);cJSON_AddBoolToObject(o,"sensorContact",!failed);

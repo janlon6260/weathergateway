@@ -11,6 +11,7 @@ import { CertificateManager } from './certificates.js';
 import { prepareRuntime } from './runtime-files.js';
 import { FirmwareBuilds } from './firmware-builds.js';
 import { Notifications } from './notifications.js';
+import { ApiClients } from './api-clients.js';
 
 process.umask(0o027);
 const config = configuration();
@@ -29,6 +30,8 @@ if (config.role === 'control') prepareRuntime(store);
 const certificateManager = config.role === 'control' ? new CertificateManager({ store, config }) : null;
 const databaseWriter = config.role === 'public' ? null : new WeatherDatabase(store, config);
 const notifications = config.role === 'control' ? new Notifications(store, config) : null;
+const apiClients = config.role === 'control' ? new ApiClients(store, config) : null;
+apiClients?.publish();
 const certificates =
   config.role === 'control'
     ? new CertificateIssuer({
@@ -85,6 +88,7 @@ if (config.role === 'control') {
   timer = setInterval(() => {
     try {
       store.sweep();
+      apiClients.publish();
       certificateManager.sweep();
       firmwareBuilds.poll();
       void notifications

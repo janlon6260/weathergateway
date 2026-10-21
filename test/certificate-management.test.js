@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { X509Certificate } from 'node:crypto';
 import request from 'supertest';
-import { setup, directory } from './helpers.js';
+import { setup, directory, approvePublicToken } from './helpers.js';
 import { CertificateManager } from '../server/certificates.js';
 import { CertificateIssuer } from '../server/pki.js';
 import { controlApp, publicApp } from '../server/app.js';
@@ -225,13 +225,19 @@ test('MQTT worker waits without credentials, starts after issuance, and reconnec
   assert.equal(stops, 2);
 });
 
-test('public API denies access while token is missing and loads the generated token without restart', async (t) => {
+test('public API denies generated tokens until administrator approval, then loads the approval without restart', async (t) => {
   const { store, manager, root } = managed(t);
   const config = { ...managedConfig(store), publicTokenFile: join(root, 'roles/public/read-token') };
   const app = publicApp({ store, config }).app;
   await request(app).get('/weather/current').set('Authorization', 'Bearer missing').expect(401);
   await manager.initialize(initial, 'admin');
-  const token = readFileSync(config.publicTokenFile, 'utf8');
+  const token = readFileSync(join(root, 'read-token'), 'utf8');
+  assert.equal(existsSync(config.publicTokenFile), false);
+  writeFileSync(config.publicTokenFile, token);
+  manager.publish();
+  assert.equal(existsSync(config.publicTokenFile), false, 'old plaintext public token is removed');
+  await request(app).get('/weather/current').set('Authorization', `Bearer ${token}`).expect(401);
+  approvePublicToken(store, config, token.trim());
   await request(app).get('/weather/current').set('Authorization', `Bearer ${token}`).expect(200);
 });
 

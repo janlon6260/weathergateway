@@ -14,6 +14,7 @@ export const configurationTables = new Set([
   'certificate_renewals',
   'deployment_acceptance',
   'settings_secrets',
+  'api_clients',
   'notification_outbox',
   'notification_state',
 ]);
@@ -212,7 +213,7 @@ export class ConfigurationDatabase {
       throw new Error('Innstillingskopien tilhører et annet miljø');
     this.transaction(() => {
       for (const table of this.tables) {
-        const rows = snapshot.tables[table.name];
+        const rows = snapshot.tables[table.name] ?? (table.name === 'api_clients' ? [] : undefined);
         if (!Array.isArray(rows)) throw new Error(`Innstillingskopien mangler ${table.name}`);
         this.prepare(`DELETE FROM ${table.name}`).run();
         const columns = table.columns.map((c) => c.name);

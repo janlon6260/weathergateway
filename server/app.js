@@ -1,7 +1,6 @@
 import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { Server as SocketServer } from 'socket.io';
 import { resolve, join } from 'node:path';
 import { accessSync, constants, readFileSync, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -11,7 +10,6 @@ import { Sessions, requireRole, privateNetworks, equal } from './auth.js';
 import { stationSchema, deviceSchema, defaultDevice, databaseSchema, id } from './schema.js';
 import { snapshot, latest, history, periodReport, legacy } from './observations.js';
 import { astronomy } from './astronomy.js';
-import { attachLegacySockets } from './legacy-sockets.js';
 import { storageHealth } from './maintenance.js';
 import { startBackup, listBackups } from './backups.js';
 import { databaseStatus } from './database-queue.js';
@@ -25,6 +23,8 @@ import { validitySchema } from './certificate-validity.js';
 import { logSession, readDeviceLogs } from './device-logs.js';
 import { verifyUsbFirmware } from './usb-firmware.js';
 import { adminSnapshot } from './admin-live.js';
+import { ApiClients, PublicAccess } from './api-clients.js';
+import { attachWeatherSockets } from './weather-sockets.js';
 
 const safeGatewayFields = [
   'confirmationSeconds',
@@ -124,6 +124,7 @@ export function controlApp({
   notifications,
 }) {
   const app = baseApp(config),
+    apiClients = new ApiClients(store, config),
     sessions = new Sessions(store, directory, { secure: config.secureCookies }),
     allowedNetwork = privateNetworks(config.adminCidrs),
     streams = new Map();
@@ -214,6 +215,7 @@ export function controlApp({
       databasePasswordKeys: admin ? Object.keys(config.databasePasswords || {}) : [],
       databaseAllowlist: admin ? config.databaseAllowlist || [] : [],
       databaseLanEndpoints: admin ? config.databaseLanEndpoints || [] : [],
+      apiClients: admin ? apiClients.list() : [],
       firmwareReleases: admin ? firmwareReleases(store) : [],
       alarms: alarmStatus(store),
       notifications: admin && notifications ? notifications.status() : null,
@@ -265,6 +267,21 @@ export function controlApp({
     });
   });
   app.get('/api/live', (_req, res) => res.json(adminSnapshot(store)));
+  app.get('/api/connections', permission('administrator'), (_req, res) => res.json(apiClients.list()));
+  app.post('/api/connections', permission('administrator'), (req, res) =>
+    res.status(201).json(apiClients.create(req.body, req.session.principal.sid)),
+  );
+  app.put('/api/connections/:id', permission('administrator'), (req, res) => {
+    const body = z
+      .object({ revision: z.number().int().positive(), value: z.record(z.string(), z.unknown()) })
+      .strict()
+      .parse(req.body);
+    res.json(apiClients.update(req.params.id, body.revision, body.value, req.session.principal.sid));
+  });
+  app.post('/api/connections/:id/rotate', permission('administrator'), (req, res) => {
+    const body = z.object({ revision: z.number().int().positive() }).strict().parse(req.body);
+    res.json(apiClients.rotate(req.params.id, body.revision, req.session.principal.sid));
+  });
   app.get('/api/notifications', permission('administrator'), (_req, res) => {
     if (!notifications) throw new Rejected('Varslingstjenesten er ikke tilgjengelig', 503);
     res.json(notifications.status());
@@ -375,8 +392,13 @@ export function controlApp({
     asyncHandler(async (req, res) => {
       const stationId = id.parse(req.params.stationId);
       store.current(`station:${stationId}`);
-      const {password,...values}=req.body;
-      const target = databaseSchema.parse({...values,...(password&&databaseWriter?{passwordSecret:databaseWriter.savePassword(password,req.session.principal.sid)}:{})});
+      const { password, ...values } = req.body;
+      const target = databaseSchema.parse({
+        ...values,
+        ...(password && databaseWriter
+          ? { passwordSecret: databaseWriter.savePassword(password, req.session.principal.sid) }
+          : {}),
+      });
       if (target.stationId !== stationId) throw new Rejected('Feil stasjonsidentitet', 400);
       if (!databaseWriter) throw new Rejected('Databasetjenesten er ikke tilgjengelig', 503);
       const report = await databaseWriter.probe(target);
@@ -454,10 +476,16 @@ export function controlApp({
     if (scope.startsWith('firmware:')) throw new Rejected('Velg en signert utgivelse under Firmware', 400);
     if (scope.startsWith('database:')) store.current(`station:${scope.slice(9)}`);
     if (scope.startsWith('alarms:')) store.current(`station:${scope.slice(7)}`);
-    let candidate=value;
-    if(scope.startsWith('database:')&&Object.hasOwn(value,'password')){
-      if(!databaseWriter)throw new Rejected('Databasetjenesten er ikke tilgjengelig',503);
-      const {password,...rest}=value;candidate={...rest,...(password?{passwordSecret:databaseWriter.savePassword(password,req.session.principal.sid)}:{})};
+    let candidate = value;
+    if (scope.startsWith('database:') && Object.hasOwn(value, 'password')) {
+      if (!databaseWriter) throw new Rejected('Databasetjenesten er ikke tilgjengelig', 503);
+      const { password, ...rest } = value;
+      candidate = {
+        ...rest,
+        ...(password
+          ? { passwordSecret: databaseWriter.savePassword(password, req.session.principal.sid) }
+          : {}),
+      };
     }
     res.status(201).json(store.propose(scope, candidate, revision, req.session.principal.sid));
   });
@@ -541,7 +569,16 @@ export function controlApp({
     res.json(firmwareBuilds.cancel(req.params.buildId, req.session.principal.sid)),
   );
   app.post('/api/firmware-builds/:buildId/usb-complete', (req, res) =>
-    res.json(firmwareBuilds.usbComplete(req.params.buildId, req.session.principal.sid,z.object({bootConfirmed:z.boolean().default(false)}).strict().parse(req.body))),
+    res.json(
+      firmwareBuilds.usbComplete(
+        req.params.buildId,
+        req.session.principal.sid,
+        z
+          .object({ bootConfirmed: z.boolean().default(false) })
+          .strict()
+          .parse(req.body),
+      ),
+    ),
   );
   app.post('/api/devices/:stationId/restart', permission('operator'), (req, res) => {
     const stationId = id.parse(req.params.stationId),
@@ -757,76 +794,56 @@ export function controlApp({
 
 export function publicApp({ store, config }) {
   const app = baseApp(config);
+  const access = new PublicAccess(store, config);
   app.use(rateLimit({ windowMs: 60000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
-  const authorized = (token) => {
-    let expected = config.publicToken;
-    if (config.publicTokenFile) {
-      try {
-        expected = readFileSync(config.publicTokenFile, 'utf8').trim();
-      } catch {
-        return false;
-      }
+  app.use((req, res, next) => {
+    if (req.method === 'OPTIONS') {
+      if (
+        !req.headers.origin ||
+        !access.policy()?.clients.some((c) => c.origins.includes(req.headers.origin))
+      )
+        return res.sendStatus(403);
+      return res
+        .set({
+          'Access-Control-Allow-Origin': req.headers.origin,
+          'Access-Control-Allow-Methods': 'GET,OPTIONS',
+          'Access-Control-Allow-Headers': 'Authorization',
+          Vary: 'Origin',
+        })
+        .sendStatus(204);
     }
-    return expected?.length >= 32 && equal(token, expected);
-  };
-  app.use((req, res, next) =>
-    authorized(req.headers.authorization?.replace(/^Bearer /, ''))
-      ? next()
-      : res.status(401).json({ error: 'Lesetilgang kreves' }),
-  );
-  app.get('/weather/current', (_req, res) => res.json(snapshot(store)));
+    req.access = access.authorize(req.headers.authorization?.replace(/^Bearer /, ''), req.headers.origin);
+    if (!req.access) return res.status(401).json({ error: 'Lesetilgang krever administratorgodkjenning' });
+    res.set('Cache-Control', 'no-store');
+    if (req.headers.origin) res.set({ 'Access-Control-Allow-Origin': req.headers.origin, Vary: 'Origin' });
+    next();
+  });
+  app.get('/weather/current', (req, res) => {
+    const selectors = req.query.station
+      ? [req.query.station]
+      : req.query.stations
+        ? String(req.query.stations).split(',')
+        : [];
+    res.json(access.filter(req.access, snapshot(store), selectors));
+  });
   app.get('/files/:stationKey/:filename', (req, res) => {
-    const station = store
-      .stationList()
+    const station = access
+      .permitted(req.access)
       .find(
         (s) =>
-          s.value.enabled &&
-          s.value.key === req.params.stationKey &&
-          (s.value.exportName === req.params.filename ||
-            s.value.templates?.some((t) => t.name === req.params.filename)),
+          s.key === req.params.stationKey &&
+          (s.exportName === req.params.filename || s.templates?.some((t) => t.name === req.params.filename)),
       );
     if (!station) throw new Rejected('Filen finnes ikke', 404);
     res
       .set('Cache-Control', 'no-store')
-      .sendFile(req.params.filename, { root: store.safe('stations', station.value.id, 'exports') });
+      .sendFile(req.params.filename, { root: store.safe('stations', station.id, 'exports') });
   });
   errors(app);
   return {
     app,
     attachSockets(server) {
-      const io = new SocketServer(server, {
-        maxHttpBufferSize: 8192,
-        perMessageDeflate: false,
-        serveClient: false,
-        allowRequest: (req, callback) =>
-          callback(
-            null,
-            !req.headers.origin ||
-              req.headers.origin === new URL(store.current('gateway').value.publicOrigin).origin,
-          ),
-      });
-      io.use((socket, next) =>
-        authorized(socket.handshake.auth?.token) && io.engine.clientsCount <= 100
-          ? next()
-          : next(new Error('Lesetilgang kreves')),
-      );
-      const stopLegacy = attachLegacySockets(io, store);
-      let previous = '';
-      const timer = setInterval(() => {
-        if (!io.engine.clientsCount) return;
-        const data = snapshot(store),
-          signature = hash(data);
-        if (signature !== previous) {
-          previous = signature;
-          io.emit('file-content', data);
-        }
-      }, 1000);
-      timer.unref();
-      return () => {
-        clearInterval(timer);
-        stopLegacy();
-        io.close();
-      };
+      return attachWeatherSockets(server, store, config);
     },
   };
 }

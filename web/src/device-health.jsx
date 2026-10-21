@@ -67,6 +67,19 @@ export function DeviceHealth({ health, now }) {
           <dd>{health.clockSynchronized ? 'Ja' : 'Nei / ikke rapportert'}</dd>
           <dt>ESP-IDF</dt>
           <dd>{health.idfVersion || '–'}</dd>
+          {health.rs485 && (
+            <>
+              <dt>RS-485-profil</dt>
+              <dd>Kun rådataopptak · {health.rs485.baud} baud</dd>
+              <dt>Mottatte RS-485-byte</dt>
+              <dd>{health.rs485.bytesReceived ?? 0}</dd>
+              <dt>UART-feil / overflyt / utelatte byte</dt>
+              <dd>
+                {health.rs485.uartErrors ?? 0} / {health.rs485.overflows ?? 0} /{' '}
+                {health.rs485.bytesOmitted ?? 0}
+              </dd>
+            </>
+          )}
           <dt>Boot-ID</dt>
           <dd className="monospace small">{health.bootId || '–'}</dd>
         </dl>

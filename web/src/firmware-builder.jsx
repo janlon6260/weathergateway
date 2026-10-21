@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { DeviceHardware } from './device-hardware.jsx';
 
 const states = {
   queued: 'Venter på byggeren',
@@ -39,6 +40,7 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
           setForm({
             mqttHost: next.configuration.mqttHost,
             mqttPort: next.configuration.mqttPort,
+            configuration: next.configuration,
             ssid: next.ssid,
             wifiPassword: '',
             purpose: 'usb',
@@ -105,6 +107,7 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
               ...(form.wifiPassword ? { wifiPassword: form.wifiPassword } : {}),
               purpose: form.purpose,
               validity: { amount: Number(form.years), unit: 'years' },
+              configuration: form.configuration,
             });
             setForm((old) => ({ ...old, wifiPassword: '' }));
             setStatus(await api(`/firmware-builds/stations/${stationId}`));
@@ -112,6 +115,18 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
         }}
       >
         <fieldset disabled={busy || pending || building || !status?.available}>
+          {form.configuration && (
+            <DeviceHardware
+              value={form.configuration}
+              onChange={(configuration) =>
+                setForm((old) => ({
+                  ...old,
+                  configuration,
+                  purpose: configuration.interface === 'davis-iss-rs485-capture' ? 'usb' : old.purpose,
+                }))
+              }
+            />
+          )}
           <div className="form-grid">
             <label>
               Gateway IP / DNS-navn
@@ -139,7 +154,9 @@ export function FirmwareBuilder({ stationId, api, busy = false, onUsbReady, onDe
               Installasjon
               <select {...field('purpose')}>
                 <option value="usb">USB på denne datamaskinen</option>
-                <option value="ota">Nettverk via MQTT/TLS (OTA)</option>
+                <option value="ota" disabled={form.configuration?.interface === 'davis-iss-rs485-capture'}>
+                  Nettverk via MQTT/TLS (OTA)
+                </option>
               </select>
             </label>
             <label>

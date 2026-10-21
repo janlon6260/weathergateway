@@ -92,6 +92,16 @@ export function configuration(env = process.env) {
     trustedProxies: commaSeparated(env.WG_TRUSTED_PROXIES || ''),
     publicToken: secret('WG_READ_TOKEN', env, { optional: true }),
     publicTokenFile: env.WG_READ_TOKEN_FILE,
+    publicAccessFile:
+      env.WG_PUBLIC_ACCESS_FILE ||
+      (role === 'public'
+        ? join(
+            env.WG_READ_TOKEN_FILE
+              ? dirname(env.WG_READ_TOKEN_FILE)
+              : join(certificateRoot, 'roles', 'public'),
+            'socket-clients.json',
+          )
+        : join(certificateRoot, 'roles', 'public', 'socket-clients.json')),
     // A non-empty inline AD password takes precedence over the optional file.
     ldapPassword: env.WG_LDAP_PASSWORD || secret('WG_LDAP_PASSWORD', env, { optional: true }),
     ldapCaFile: env.WG_LDAP_CA_FILE,

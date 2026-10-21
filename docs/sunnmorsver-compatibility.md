@@ -64,6 +64,8 @@ Kritiske regler fra konsumentkoden:
 
 ## Implementert kontrakt og gjenværende verifikasjon
 
+Tilgang krever nå eksplisitt administratorgodkjenning under **Tilkoblinger**, også for eksisterende lesetoken. Legacy-hendelsene bevares og filtreres etter klientens godkjente stasjoner. Hver `file-content`-stasjon har i tillegg et numerisk `wind`-objekt med blant annet `toDegrees`, `arrowRotationDegrees` og `beaufort`. Det nye namespace `/weather` leverer alle tilgjengelige værfelt og filtrering på navn/ID. Se [API-kontrakten og overgang for Sunnmørsvær](socket-api.md).
+
 Socket.IO testes med faktisk server/klient. Vind er m/s, tidspunkter er ISO/UTC i trendserier. Døgnresponsen beholder lokal timestamp og gir i tillegg UTC-identitet for gjentatt høsttime. Tidsvektet middelvind/retning, vindrun, vindrose, solmaksimum og siste regnintervall beregnes nå når datagrunnlaget finnes. Felt uten bekreftet kilde eller legacy-semantikk, blant annet `domwinddir` og retningsspenn, beholdes tomme frem til referansesammenligning. Manglende verdier blir ikke fiktive nullmålinger. Full feltparitet må fortsatt prøves mot faktiske eksportfiler.
 
 ## Påkrevde kontrakttester før overgang

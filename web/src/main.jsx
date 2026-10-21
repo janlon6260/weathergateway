@@ -6,6 +6,10 @@ import { DeviceTools } from './device-tools.jsx';
 import { DataFreshness, Measurement, FreshnessFields } from './freshness.jsx';
 import { dataStatus, freshnessThresholds } from '../../shared/freshness.js';
 import { DeviceHealth } from './device-health.jsx';
+import { WindReading } from './wind.jsx';
+import { ApiClientAdministration } from './api-clients.jsx';
+import { deviceInterfaceName } from '../../shared/device-hardware.js';
+import { DeviceHardware } from './device-hardware.jsx';
 import { NotificationSettings } from './notifications.jsx';
 import { meteorologyDefaults, calibrationDefaults } from '../../shared/meteorology-settings.js';
 import { alarmMetrics } from '../../shared/alarm-metrics.js';
@@ -28,6 +32,7 @@ const labels = {
   alarms: 'Alarmer',
   readiness: 'Produksjonsstatus',
   certificates: 'Sertifikater',
+  connections: 'Tilkoblinger',
 };
 const pageDescriptions = {
   overview: 'Status og siste målinger fra værstasjonene dine.',
@@ -42,6 +47,7 @@ const pageDescriptions = {
   alarms: 'Alarmregler, aktive varsler og hendelseshistorikk.',
   readiness: 'Driftskontroller og dokumenterte prøver før produksjon.',
   certificates: 'CA, tjenestesertifikater, ESP32-identiteter og firmware-nøkler.',
+  connections: 'Godkjenn tredjepartstilgang til Socket.IO og værdata.',
 };
 const stateLabels = {
   draft: 'Utkast',
@@ -292,7 +298,9 @@ function App() {
   const visiblePages = Object.keys(labels)
     .filter(
       (p) =>
-        !['settings', 'audit', 'databases', 'firmware', 'readiness', 'certificates'].includes(p) || admin,
+        !['settings', 'audit', 'databases', 'firmware', 'readiness', 'certificates', 'connections'].includes(
+          p,
+        ) || admin,
     )
     .filter((p) => p !== 'devices' || operator);
   function scopeName(scope) {
@@ -403,7 +411,9 @@ function App() {
               onClick={() => setPage(p)}
             >
               <span className="nav-icon" aria-hidden="true">
-                {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓', '◇'][Object.keys(labels).indexOf(p)]}
+                {['◈', '▤', '⌁', '↻', '⚙', '▥', '≡', '▦', '⇧', '♧', '✓', '◇'][
+                  Object.keys(labels).indexOf(p)
+                ] || '⇄'}
               </span>
               {labels[p]}
               {p === 'changes' && openChanges.length > 0 && (
@@ -607,13 +617,7 @@ function App() {
                               />
                             </td>
                             <td>
-                              <Measurement
-                                data={l}
-                                metric="windSpeedMs"
-                                alias="wlatest"
-                                suffix=" m/s"
-                                now={now}
-                              />
+                              <WindReading data={l} now={now} />
                             </td>
                             <td>
                               <Measurement data={l} metric="humidityPct" alias="hum" suffix=" %" now={now} />
@@ -663,6 +667,14 @@ function App() {
               )}
             </>
           )}
+          {page === 'connections' && admin && (
+            <ApiClientAdministration
+              clients={data.apiClients || []}
+              stations={data.stations}
+              api={api}
+              onSaved={refresh}
+            />
+          )}
           {page === 'devices' && (
             <>
               <div className="device-grid">
@@ -680,12 +692,7 @@ function App() {
                         />
                       </div>
                       <h2>{station?.name}</h2>
-                      <p className="muted">
-                        ESP-WROOM-32 ·{' '}
-                        {device.value.interface === 'davis-iss-rfm69'
-                          ? 'RFM69HCW · 868 MHz'
-                          : 'Davis seriell'}
-                      </p>
+                      <p className="muted">ESP-WROOM-32 · {deviceInterfaceName(device.value)}</p>
                       <DeviceHealth health={device.delivery} now={now} />
                       <details className="device-details">
                         <summary>Enhetsoppsett og ISS-radio</summary>
@@ -1557,6 +1564,19 @@ function FirmwareManager({ releases, stations, pending, upload, deploy, build })
 }
 function DeviceForm({ record, pending, save }) {
   const [item, set] = useState(record.value);
+  if (item.interface === 'davis-iss-rs485-capture')
+    return (
+      <div className="settings-form">
+        <h2 id="modal-title">RS-485-opptaksprofil</h2>
+        <p>
+          Dette er en mottaksprofil for å dokumentere den kablede ISS-protokollen. Endre GPIO, UART-hastighet
+          og nettverk ved å bygge en ny USB-pakke under Enheter.
+        </p>
+        <fieldset disabled>
+          <DeviceHardware value={item} onChange={() => {}} />
+        </fieldset>
+      </div>
+    );
   return (
     <form
       onSubmit={(e) => {

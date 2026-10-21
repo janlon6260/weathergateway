@@ -497,12 +497,16 @@ export class CertificateManager {
         'database-client.key',
         'weather-db-encryption.key',
       ],
-      public: ['read-token'],
+      public: [],
     };
     mkdirSync(this.path('roles'), { recursive: true, mode: 0o750 });
     for (const [role, files] of Object.entries(roles)) {
       const directory = `roles/${role}`;
       mkdirSync(this.path(directory), { recursive: true, mode: 0o750 });
+      // The public service authorizes derived hashes from the leased policy.
+      // Keep the legacy plaintext token only in control for explicit adoption.
+      if (role === 'public' && existsSync(this.path(`${directory}/read-token`)))
+        unlinkSync(this.path(`${directory}/read-token`));
       const contents = [];
       for (const file of files) {
         const source = this.path(file),

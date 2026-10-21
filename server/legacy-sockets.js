@@ -126,10 +126,19 @@ export function dayResponse(store, key, date) {
     maxRainRate: report.summary.rainRateMmH_MAX ?? null,
   };
 }
-export function attachLegacySockets(io, store) {
+export function attachLegacySockets(
+  io,
+  store,
+  {
+    authorize = () => null,
+    filter = (_socket, object) => object,
+    station = (_socket, key) => key,
+    snapshot: current = () => snapshot(store),
+  } = {},
+) {
   io.on('connection', (socket) => {
-    socket.emit('file-content', snapshot(store));
-    socket.emit('trend_snapshot', trendSnapshot(store));
+    socket.emit('file-content', filter(socket, current()));
+    socket.emit('trend_snapshot', filter(socket, trendSnapshot(store)));
     let window = store.clock(),
       requests = 0;
     const handle = (event, fn) =>
@@ -143,23 +152,24 @@ export function attachLegacySockets(io, store) {
           return;
         }
         try {
+          authorize(socket);
           fn(payload);
         } catch {
           socket.emit('trendData', { error: 'Invalid request or data unavailable' });
         }
       });
-    handle('get_trends', () => socket.emit('trend_snapshot', trendSnapshot(store)));
+    handle('get_trends', () => socket.emit('trend_snapshot', filter(socket, trendSnapshot(store))));
     handle('fetch24HourTrend', (p) => {
       if (!p || typeof p.station !== 'string' || typeof p.type !== 'string') throw new Error();
       socket.emit('trendData', {
-        station: p.station,
+        station: station(socket, p.station),
         type: p.type,
-        data: trendRows(store, p.station, p.type),
+        data: trendRows(store, station(socket, p.station), p.type),
       });
     });
     handle('fetchTrendData', (p) => {
       if (!p || typeof p.station !== 'string' || typeof p.date !== 'string') throw new Error();
-      socket.emit('trendData', dayResponse(store, p.station, p.date));
+      socket.emit('trendData', dayResponse(store, station(socket, p.station), p.date));
     });
   });
   let previous = {};
@@ -168,7 +178,14 @@ export function attachLegacySockets(io, store) {
     const next = trendSnapshot(store);
     for (const [station, types] of Object.entries(next))
       for (const [type, trend] of Object.entries(types))
-        if (previous[station]?.[type] !== trend) io.emit('trend_update', { station, type, trend });
+        if (previous[station]?.[type] !== trend)
+          for (const socket of io.of('/').sockets.values())
+            try {
+              if (Object.hasOwn(filter(socket, { [station]: true }), station))
+                socket.emit('trend_update', { station, type, trend });
+            } catch {
+              socket.disconnect(true);
+            }
     previous = next;
   }, 30000);
   timer.unref();

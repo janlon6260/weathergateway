@@ -1,13 +1,15 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, relative } from 'node:path';
+import { join, resolve, relative, dirname } from 'node:path';
 import { Store, Rejected } from '../server/store.js';
 import { configuration, initialize } from '../server/bootstrap.js';
+import { ApiClients } from '../server/api-clients.js';
 
 export function setup(t, environment = 'test') {
   const temp = resolve(mkdtempSync(join(tmpdir(), 'wg-test-'))),
     config = configuration({
       WG_ENVIRONMENT: environment,
+      WG_DATA_ROOT: temp,
       WG_ADMIN_ORIGIN: 'http://localhost:5173',
       ...(environment !== 'production' ? { WG_ALLOW_LOCAL_HTTP: 'true' } : {}),
     });
@@ -20,6 +22,17 @@ export function setup(t, environment = 'test') {
     if (!rel.startsWith('..') && rel.startsWith('wg-test-')) rmSync(temp, { recursive: true, force: true });
   });
   return { store, config, tick: (ms) => (now += ms), now: () => now };
+}
+export function approvePublicToken(store, config, token, options = {}) {
+  config.publicAccessFile ||= config.publicTokenFile
+    ? join(dirname(config.publicTokenFile), 'socket-clients.json')
+    : store.safe('test-public-policy', 'socket-clients.json');
+  const clients = new ApiClients(store, { ...config, publicToken: token });
+  clients.create(
+    { name: 'Explicit test approval', adoptLegacyToken: true, ...options },
+    'test-administrator',
+  );
+  return clients;
 }
 export const principal = (roles) => ({
   sid: 'S-1-5-21-1-2-3-1001',
