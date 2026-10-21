@@ -39,9 +39,19 @@ Automatisk profil og null som nord bevarer tidligere oppførsel. Pro2-/Vue-forml
 
 Vindvalgene lagres med stasjonsinnstillingene i MariaDB `weathergateway` og følger utkast/test/bekreftelse. De gjelder nye radio- og RS485-ISS-pakker etter bekreftelse. Eldre observasjoner omskrives ikke. Råbytes, dekodede verdier før kalibrering og kalibreringsrevisjon beholdes. Disse innstillingene endrer ikke ESP-firmware.
 
-**Rådata** viser de siste 60 sekundene etter gatewayens mottakstid, for alle stasjoner eller én valgt stasjon. Trykk på en pakke for hex/desimal-byte, pakketype, sender-ID, kanal/RSSI, CRC, retningsbyte, dekodede målinger og verdier etter kalibrering. Oversikten oppdateres hvert andre sekund og viser maksimalt 500 pakker, med melding ved avkorting. Forsinkede pakker fra ESP-køen får sin opprinnelige måletid vist separat.
+**Rådata** viser WG sin lagrede tolkning av pakkene siste 60 sekunder, for alle stasjoner eller én valgt stasjon. Temperatur, luftfuktighet, vindhastighet, retning og andre pakkeverdier vises direkte med norske feltnavn og enheter. Beaufort og retningen vinden blåser mot vises også. Trykk på en pakke for tabellen **WG sin tolkning**, med WG-verdi, verdi før kalibrering og grunnlag: **Denne pakken**, **Tidligere måling** eller **Beregnet av WG**. Verdier videreført fra tidligere ISS-pakker får sitt opprinnelige måletidspunkt. Manglende beregningsresultat vises som **Ikke beregnet**. En regnteller på null vises som null, ikke som manglende data.
+
+Hex/desimal-byte, CRC, retningsbyte og JSON ligger under **Tekniske detaljer (råbytes og JSON)**. Verdiene gjendekodes ikke med dagens kalibrering; visningen bruker den tolkningen som faktisk ble lagret ved mottak. Avviste pakker får ingen godkjente værverdier i visningen. Oversikten oppdateres hvert andre sekund og viser maksimalt 500 pakker, med melding ved avkorting. Vinduet følger gatewayens mottakstid; forsinkede pakker fra ESP-køen har sin opprinnelige måletid vist separat.
 
 Pakker som gatewayen avviser vises med avvisningsstatus. Dette er MQTT-videresendte Davis-pakker; RF-pakker som ESP32 forkaster før MQTT ligger ikke i denne listen. Siste avviste RF-pakke og tellere finnes fortsatt i enhetens radiodiagnostikk. `/api/packets` krever intern AD-sesjon og finnes ikke på den offentlige tjenesten. Automatisk polling forlenger ikke en inaktiv sesjon.
+
+### Stabile statuskort og ESP-kontakt
+
+**Tilkoblet** teller ESP-er med registrert kontakt fra heartbeat eller ny telemetri. Tresekundersgrensen for værmålinger reduserer ikke lenger denne telleren. **Trenger oppfølging** teller rød datastatus eller frakoblet ESP. Oransje er fortsatt synlig i stasjonens statusprikk og detaljpopup, uten å få oppfølgingskortet til å blinke ved normal pakkekadens.
+
+**Innstillinger → ESP-kontakt: tidsavbrudd (sekunder)** har standard 30 sekunder og kan settes til 15–3600 sekunder. Verdien lagres i MariaDB `weathergateway` og følger test/bekreftelse. En eksplisitt MQTT-frakobling (LWT) vises straks. Nye live-data etter frakoblingen viser enheten som tilkoblet igjen. Beholdte eller gjentatte heartbeat-meldinger og historikkimport regnes ikke som ny kontakt. Detaljpopupen viser enhetskontakt, siste kontakttid og tidsavbrudd.
+
+Statusprikkene oppdateres samlet fra ett serverøyeblikk. Mellom de sekundvise SSE-oppdateringene aldersberegner ikke en separat nettleserklokke den forrige pakken til oransje rett før neste oppdatering. Ved uteblitte oppdateringer gjenopptas lokal aldersberegning etter to forventede oppdateringsintervaller; fryst grønn status skjuler derfor ikke et forbindelsesbrudd.
 
 ### Databaselogging
 

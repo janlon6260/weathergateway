@@ -23,6 +23,7 @@ import { validitySchema } from './certificate-validity.js';
 import { logSession, readDeviceLogs } from './device-logs.js';
 import { verifyUsbFirmware } from './usb-firmware.js';
 import { adminSnapshot } from './admin-live.js';
+import { liveSnapshotIntervalMs } from '../shared/freshness.js';
 import { recentPackets } from './raw-packets.js';
 import { ApiClients, PublicAccess } from './api-clients.js';
 import { attachWeatherSockets } from './weather-sockets.js';
@@ -36,6 +37,7 @@ const safeGatewayFields = [
   'downSeconds',
   'dataWarningSeconds',
   'dataDownSeconds',
+  'deviceContactSeconds',
   'databaseLoggingEnabled',
 ];
 const asyncHandler = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -432,7 +434,7 @@ export function controlApp({
       }
     };
     void send();
-    const timer = setInterval(send, 1000);
+    const timer = setInterval(send, liveSnapshotIntervalMs);
     timer.unref();
     res.on('close', () => {
       clearInterval(timer);

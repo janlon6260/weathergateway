@@ -1,5 +1,10 @@
 import React from 'react';
-import { ageLabel, dataStatus, freshnessThresholds } from '../../shared/freshness.js';
+import {
+  ageLabel,
+  liveDataStatus,
+  deviceConnectionStatus,
+  freshnessThresholds,
+} from '../../shared/freshness.js';
 import { windPresentation } from '../../shared/wind.js';
 
 const fields = {
@@ -23,7 +28,8 @@ const fields = {
 const date = (at) => (at ? new Date(at).toLocaleString('nb-NO') : 'Ingen data');
 export function StationDetails({ station, gateway, data = {}, now, onPackets }) {
   const limits = freshnessThresholds(gateway, station);
-  const status = dataStatus(data.lastValidTime, now, limits, station.enabled);
+  const status = liveDataStatus(data, now, limits, station.enabled);
+  const connection = deviceConnectionStatus(data.connection, now, station.enabled);
   const names = {
     green: 'Ferske data',
     orange: 'Forsinkede data',
@@ -38,6 +44,23 @@ export function StationDetails({ station, gateway, data = {}, now, onPackets }) 
       <p className="eyebrow">MÅLEDETALJER</p>
       <h2 id="modal-title">{station.name}</h2>
       <div className="detail-summary">
+        <div>
+          <span>ESP-kontakt</span>
+          <strong>
+            {
+              {
+                online: 'Tilkoblet',
+                offline: 'Frakoblet',
+                unknown: 'Ingen kontakt registrert',
+                disabled: 'Deaktivert',
+              }[connection]
+            }
+          </strong>
+          <small>
+            {ageLabel(data.connection?.lastContactAt, now)} · tidsavbrudd{' '}
+            {data.connection?.timeoutSeconds ?? 30} s
+          </small>
+        </div>
         <div>
           <span>Status</span>
           <strong>{names[status]}</strong>

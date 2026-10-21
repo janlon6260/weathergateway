@@ -5,7 +5,9 @@ const protocols = new Set(['davis-iss', 'davis-iss-rs485', 'davis-loop']);
 const numericFields = (value) =>
   Object.fromEntries(
     Object.entries(value || {}).filter(
-      ([key, v]) => /^[A-Za-z][A-Za-z0-9]{0,60}$/.test(key) && typeof v === 'number' && Number.isFinite(v),
+      ([key, v]) =>
+        /^[A-Za-z][A-Za-z0-9]{0,60}$/.test(key) &&
+        (v === null || (typeof v === 'number' && Number.isFinite(v))),
     ),
   );
 export function packetView(body, row, station, status = 'accepted') {
@@ -21,6 +23,15 @@ export function packetView(body, row, station, status = 'accepted') {
   const bytes = Buffer.from(source.packet, 'base64');
   if (bytes.length > 256) return null;
   const iss = source.protocol.startsWith('davis-iss');
+  const accepted = status === 'accepted';
+  const measurements = accepted ? numericFields(body.measurements) : {};
+  const rawMeasurements = accepted ? numericFields(body.rawMeasurements) : {};
+  const derived = accepted ? numericFields(body.derived) : {};
+  const metrics = new Set([
+    ...Object.keys(measurements),
+    ...Object.keys(rawMeasurements),
+    ...Object.keys(derived),
+  ]);
   return {
     id: `${row.station_id}:${row.boot_id}:${row.sequence}:${status}`,
     stationId: station.id,
@@ -58,10 +69,26 @@ export function packetView(body, row, station, status = 'accepted') {
         }
       : {}),
     calibrationRevision: Number.isInteger(body.calibrationRevision) ? body.calibrationRevision : null,
-    rawMeasurements: numericFields(body.rawMeasurements),
-    measurements: numericFields(body.measurements),
-    derived: numericFields(body.derived),
-    wind: windPresentation(body.measurements?.windSpeedMs, body.measurements?.windDirectionDeg),
+    rawMeasurements,
+    measurements,
+    derived,
+    freshFields:
+      accepted && Array.isArray(body.freshFields) ? body.freshFields.filter((key) => metrics.has(key)) : null,
+    measurementTimes: accepted
+      ? Object.fromEntries(
+          Object.entries(body.measurementTimes || {}).filter(
+            ([key, at]) => metrics.has(key) && typeof at === 'string' && Number.isFinite(Date.parse(at)),
+          ),
+        )
+      : {},
+    rainCounterTips:
+      accepted &&
+      Number.isInteger(body.iss?.rainCounterTips) &&
+      body.iss.rainCounterTips >= 0 &&
+      body.iss.rainCounterTips < 128
+        ? body.iss.rainCounterTips
+        : null,
+    wind: windPresentation(measurements.windSpeedMs, measurements.windDirectionDeg),
   };
 }
 export function recentPackets(store, stationId) {

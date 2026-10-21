@@ -1279,15 +1279,58 @@ button.status-dot {
   font-size: 12px;
   line-height: 1.8;
 }
-.packet > summary > span,
-.packet > summary > strong {
-  margin-right: 14px;
+.packet-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  vertical-align: top;
 }
-.packet > summary code {
-  display: block;
+.packet-readable {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding-top: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.packet-readable > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.packet-readable > span > span {
+  color: #738895;
+  font-size: 11px;
+}
+.packet-readable strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.packet-readable .packet-rejected {
+  color: #ad625a;
+}
+.packet-content .packet-measurements td,
+.packet-content .packet-measurements th {
+  font-family: inherit;
+  padding: 10px 12px;
+}
+.packet-content .packet-measurements td:nth-child(2) {
+  font-weight: 600;
+}
+.packet-content h3 {
+  margin: 8px 0 12px;
+  font-size: 13px;
+}
+.packet-technical > summary {
+  cursor: pointer;
+  color: #738895;
   font-size: 12px;
-  white-space: normal;
+}
+.packet-technical code {
+  display: block;
   overflow-wrap: anywhere;
+}
+.stat strong {
+  font-variant-numeric: tabular-nums;
 }
 .packet-content {
   padding: 0 24px 24px;

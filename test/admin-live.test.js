@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { setup, observation } from './helpers.js';
 import { ingest } from '../server/observations.js';
 import { adminSnapshot } from '../server/admin-live.js';
-import { dataStatus, freshnessThresholds } from '../shared/freshness.js';
+import {
+  dataStatus,
+  freshnessThresholds,
+  liveDataStatus,
+  deviceConnectionStatus,
+} from '../shared/freshness.js';
 import { recordDeviceHealth, deviceHealthSchema } from '../server/device-health.js';
 test('admin retains last good values through outages, partial measurements and restart-independent reads with global/per-station ages', (t) => {
   const s = setup(t),
@@ -147,4 +152,84 @@ test('device health ignores stale retained online packets and replayed heartbeat
   assert.equal(health.freeHeapBytes, 100000);
   assert.equal(health.online, false);
   assert.equal(s.now() - health.lastContactAt, 5000);
+});
+
+test('ESP connectivity stays online through weather freshness boundaries and missing ISS contact, then respects timeout and LWT', (t) => {
+  const { store, now, tick } = setup(t),
+    station = store.stationList()[0].value;
+  const snapshot = () => adminSnapshot(store)[station.key];
+  assert.equal(snapshot().connection.state, 'unknown');
+  ingest(store, station.id, observation(station.id, now()));
+  tick(3001);
+  assert.equal(snapshot().status, 'orange');
+  assert.equal(snapshot().connection.state, 'online');
+  tick(1000);
+  recordDeviceHealth(store, station.id, { online: true });
+  tick(26000);
+  assert.equal(snapshot().status, 'red');
+  assert.equal(snapshot().connection.state, 'online');
+  ingest(
+    store,
+    station.id,
+    observation(station.id, now(), { sequence: 2, sensorContact: false, measurements: {} }),
+  );
+  assert.equal(snapshot().connection.state, 'online');
+  assert.equal(snapshot().sensorContact, false);
+  tick(30001);
+  assert.equal(snapshot().connection.state, 'offline');
+  recordDeviceHealth(store, station.id, { online: true }, { retained: true });
+  assert.equal(snapshot().connection.state, 'offline', 'retained status must not invent new contact');
+  recordDeviceHealth(store, station.id, { online: true });
+  assert.equal(snapshot().connection.state, 'online');
+  tick(1);
+  recordDeviceHealth(store, station.id, { online: false });
+  assert.equal(snapshot().connection.state, 'offline', 'explicit LWT is immediate');
+  tick(1);
+  ingest(store, station.id, observation(station.id, now(), { sequence: 3 }));
+  assert.equal(snapshot().connection.state, 'online', 'new live telemetry after LWT restores contact');
+});
+
+test('live snapshots drive status as one frame and stopped streams still age and disconnect without further server updates', (t) => {
+  const { store, now, tick } = setup(t),
+    station = store.stationList()[0].value;
+  ingest(store, station.id, observation(station.id, now()));
+  tick(2900);
+  const sample = adminSnapshot(store)[station.key];
+  const thresholds = freshnessThresholds(store.confirmedValue('gateway'), station);
+  tick(200);
+  assert.equal(dataStatus(sample.lastValidTime, now(), thresholds), 'orange');
+  assert.equal(
+    liveDataStatus(sample, now(), thresholds),
+    'green',
+    'no local-clock flash before the next complete SSE frame',
+  );
+  assert.equal(deviceConnectionStatus(sample.connection, now()), 'online');
+  assert.equal(
+    liveDataStatus(adminSnapshot(store)[station.key], now(), thresholds),
+    'orange',
+    'genuine server warnings remain visible',
+  );
+  tick(2001);
+  assert.equal(
+    liveDataStatus(sample, now(), thresholds),
+    'orange',
+    'a stalled stream must not freeze green indefinitely',
+  );
+  tick(30000);
+  assert.equal(liveDataStatus(sample, now(), thresholds), 'red');
+  assert.equal(deviceConnectionStatus(sample.connection, now()), 'offline');
+  assert.equal(liveDataStatus(sample, now(), thresholds, false), 'disabled');
+  assert.equal(deviceConnectionStatus(sample.connection, now(), false), 'disabled');
+});
+
+test('history imports do not count as a newly connected ESP', (t) => {
+  const { store, now } = setup(t),
+    station = store.stationList()[0].value;
+  ingest(store, station.id, observation(station.id, now() - 86400000), {
+    historical: true,
+    enqueueDatabase: false,
+  });
+  const snapshot = adminSnapshot(store)[station.key];
+  assert.equal(snapshot.connection.state, 'unknown');
+  assert.equal(snapshot.lastPacketReceivedAt, null);
 });

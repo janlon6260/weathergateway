@@ -1,8 +1,8 @@
 import React from 'react';
-import { dataStatus, freshnessThresholds } from '../../shared/freshness.js';
+import { liveDataStatus, freshnessThresholds } from '../../shared/freshness.js';
 export function DataFreshness({ station, gateway, data = {}, now, onDetails }) {
   const thresholds = freshnessThresholds(gateway, station),
-    status = dataStatus(data.lastValidTime, now, thresholds, station.enabled);
+    status = liveDataStatus(data, now, thresholds, station.enabled);
   const labels = {
     green: 'Ferske data',
     orange: 'Forsinkede data',

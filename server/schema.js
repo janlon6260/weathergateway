@@ -75,6 +75,7 @@ export const gatewaySchema = z
     backupKeepCount: z.number().int().min(2).max(365).default(30),
     dataWarningSeconds: z.number().min(0.1).max(86400).default(3),
     dataDownSeconds: z.number().min(1).max(172800).default(30),
+    deviceContactSeconds: z.number().int().min(15).max(3600).default(30),
     databaseLoggingEnabled: z.boolean().default(true),
     warningSeconds: z.number().int().min(10).max(86400).default(180),
     downSeconds: z.number().int().min(20).max(172800).default(300),

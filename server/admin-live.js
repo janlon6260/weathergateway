@@ -41,6 +41,7 @@ export function retainDisplay(store, stationId, body) {
 }
 export function adminSnapshot(store) {
   const gateway = store.confirmedValue('gateway');
+  const now = store.clock();
   return Object.fromEntries(
     store
       .stationList()
@@ -62,19 +63,39 @@ export function adminSnapshot(store) {
         const thresholds = freshnessThresholds(gateway, s),
           result = {
             ...display,
+            asOf: now,
             thresholds,
-            status: dataStatus(display.lastValidTime, store.clock(), thresholds, s.enabled),
+            status: dataStatus(display.lastValidTime, now, thresholds, s.enabled),
           };
         for (const [field, target] of Object.entries(displayFields))
           result[target] = display.fields[field]?.value ?? null;
         result.sensorContact = latest(store, s.id)?.sensorContact ?? false;
         const packetRow = store.db
           .prepare(
-            'SELECT * FROM observations WHERE station_id=? ORDER BY received_at DESC,sequence DESC LIMIT 1',
+            "SELECT * FROM observations WHERE station_id=? AND json_extract(body,'$.imported') IS NULL ORDER BY received_at DESC,sequence DESC LIMIT 1",
           )
           .get(s.id);
         result.lastPacketReceivedAt = packetRow ? new Date(packetRow.received_at).toISOString() : null;
         result.lastPacket = packetRow ? packetView(JSON.parse(packetRow.body), packetRow, s) : null;
+        const healthRow = store.db.prepare('SELECT * FROM device_status WHERE station_id=?').get(s.id);
+        const health = healthRow ? JSON.parse(healthRow.payload) : null;
+        const lastContact = Math.max(packetRow?.received_at ?? 0, health?.lastContactAt ?? 0);
+        const timeoutSeconds = gateway.deviceContactSeconds ?? 30;
+        const disconnected =
+          health?.online === false && healthRow.received_at >= (packetRow?.received_at ?? 0);
+        result.connection = {
+          state: !s.enabled
+            ? 'disabled'
+            : disconnected
+              ? 'offline'
+              : !lastContact
+                ? 'unknown'
+                : now - lastContact > timeoutSeconds * 1000
+                  ? 'offline'
+                  : 'online',
+          lastContactAt: lastContact ? new Date(lastContact).toISOString() : null,
+          timeoutSeconds,
+        };
         result.wind = windPresentation(result.wlatest, result.bearing);
         return [s.key, result];
       }),

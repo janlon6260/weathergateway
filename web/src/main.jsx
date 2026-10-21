@@ -4,7 +4,7 @@ import './style.css';
 import { CertificateAdministration } from './certificates.jsx';
 import { DeviceTools } from './device-tools.jsx';
 import { DataFreshness, Measurement, FreshnessFields } from './freshness.jsx';
-import { dataStatus, freshnessThresholds } from '../../shared/freshness.js';
+import { liveDataStatus, deviceConnectionStatus, freshnessThresholds } from '../../shared/freshness.js';
 import { DeviceHealth } from './device-health.jsx';
 import { WindReading } from './wind.jsx';
 import { WindSettings } from './wind-settings.jsx';
@@ -149,7 +149,14 @@ function App() {
     events.onopen = () => setConnected(true);
     events.onerror = () => setConnected(false);
     events.onmessage = (e) => {
-      if (active) setLive(JSON.parse(e.data));
+      if (!active) return;
+      const snapshot = JSON.parse(e.data);
+      const at = Math.max(...Object.values(snapshot).map((item) => item.asOf || 0));
+      if (Number.isFinite(at) && at > 0) {
+        offset.current = at - Date.now();
+        setNow(at);
+      }
+      setLive(snapshot);
     };
     return () => {
       active = false;
@@ -298,9 +305,10 @@ function App() {
   const openChanges = data.changes.filter((c) => ['draft', 'testing', 'confirming'].includes(c.state));
   const currentStatuses = data.stations
     .filter((s) => s.value.model !== 'Netatmo')
-    .map(({ value: s }) =>
-      dataStatus(live[s.key]?.lastValidTime, now, freshnessThresholds(data.gateway.value, s), s.enabled),
-    );
+    .map(({ value: s }) => ({
+      weather: liveDataStatus(live[s.key], now, freshnessThresholds(gateway, s), s.enabled),
+      connection: deviceConnectionStatus(live[s.key]?.connection, now, s.enabled),
+    }));
   const visiblePages = Object.keys(labels)
     .filter(
       (p) =>
@@ -528,14 +536,18 @@ function App() {
                 />
                 <Stat
                   label="Tilkoblet"
-                  number={currentStatuses.filter((status) => status === 'green').length}
-                  detail="Ferske og gyldige målinger"
+                  number={currentStatuses.filter((status) => status.connection === 'online').length}
+                  detail="ESP-er med kontakt med gatewayen"
                   tone="green"
                 />
                 <Stat
                   label="Trenger oppfølging"
-                  number={currentStatuses.filter((status) => ['orange', 'red'].includes(status)).length}
-                  detail="Forsinkede data eller sensorfeil"
+                  number={
+                    currentStatuses.filter(
+                      (status) => status.weather === 'red' || status.connection === 'offline',
+                    ).length
+                  }
+                  detail="Utdaterte data eller frakoblede ESP-er"
                   tone="amber"
                 />
                 <Stat
@@ -1729,6 +1741,16 @@ function Settings({ record, pending, save }) {
     >
       <h2>Gateway</h2>
       <FreshnessFields item={item} set={set} gateway />
+      <Field
+        label="ESP-kontakt: tidsavbrudd (sekunder)"
+        name="deviceContactSeconds"
+        type="number"
+        min="15"
+        max="3600"
+        step="1"
+        item={{ ...item, deviceContactSeconds: item.deviceContactSeconds ?? 30 }}
+        set={set}
+      />
       <label className="checkbox">
         <input
           type="checkbox"

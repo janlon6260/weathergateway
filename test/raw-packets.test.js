@@ -6,6 +6,8 @@ import { ingest } from '../server/observations.js';
 import { durableTelemetryReceipt } from '../server/worker.js';
 import { controlApp, publicApp } from '../server/app.js';
 import { recentPackets } from '../server/raw-packets.js';
+import { crcCcitt } from '../server/davis.js';
+import { packetReadings, packetKind, readingValue } from '../shared/packet-values.js';
 
 const packet = '8004700f99009111ffff';
 const source = () => ({
@@ -54,16 +56,16 @@ test('rejected MQTT Davis packets remain inspectable without exposing arbitrary 
   assert.equal(raw.length, 1);
   assert.equal(raw[0].status, 'rejected');
   assert.equal(raw[0].checksum, 'invalid');
-  store.db
-    .prepare('UPDATE telemetry_rejections SET payload=?')
-    .run(
-      JSON.stringify({
-        ...body,
-        password: 'do-not-return',
-        wifi: { password: 'secret' },
-        environment: { LDAP_PASSWORD: 'secret' },
-      }),
-    );
+  assert.deepEqual(raw[0].measurements, {});
+  assert.deepEqual(packetReadings(raw[0]), []);
+  store.db.prepare('UPDATE telemetry_rejections SET payload=?').run(
+    JSON.stringify({
+      ...body,
+      password: 'do-not-return',
+      wifi: { password: 'secret' },
+      environment: { LDAP_PASSWORD: 'secret' },
+    }),
+  );
   assert.doesNotMatch(JSON.stringify(recentPackets(store)), /do-not-return|password|LDAP_PASSWORD/);
   store.db.prepare('UPDATE telemetry_rejections SET payload=?').run('{bad json');
   assert.equal(recentPackets(store).packets.length, 0);
@@ -116,4 +118,75 @@ test('raw packet result has a bounded size and stable newest-first ordering', (t
   assert.equal(result.truncated, true);
   assert.equal(result.packets[0].sequence, 510);
   assert.equal(result.packets.at(-1).sequence, 11);
+});
+
+test('interpreted packet readings use the saved WG calibration and distinguish new, carried and calculated values', (t) => {
+  const { store, now, tick } = setup(t),
+    record = store.stationList()[0],
+    station = record.value;
+  const change = store.propose(
+    record.scope,
+    { ...station, calibration: { ...station.calibration, temperatureOffsetC: 2 } },
+    record.revision,
+    'test',
+  );
+  store.begin(change.id, 'test');
+  store.health(change.id, true, { storage: 'ok' });
+  store.confirm(change.id, 'test');
+  ingest(store, station.id, observation(station.id, now(), { source: source() }));
+  const first = recentPackets(store).packets[0];
+  const temperature = packetReadings(first).find((r) => r.metric === 'temperatureC');
+  assert.equal(temperature.source, 'packet');
+  assert.equal(temperature.label, 'Temperatur');
+  assert.equal(temperature.value, first.measurements.temperatureC);
+  assert.equal(temperature.value, temperature.rawValue + 2);
+  assert.match(readingValue(temperature), /°C$/);
+  tick(2500);
+  const humidity = Buffer.from([0xa0, 4, 192, 63, 32, 0, 0, 0, 255, 255]);
+  humidity.writeUInt16BE(crcCcitt(humidity.subarray(0, 6)), 6);
+  ingest(
+    store,
+    station.id,
+    observation(station.id, now(), {
+      sequence: 2,
+      source: { ...source(), packet: humidity.toString('base64') },
+    }),
+  );
+  const second = recentPackets(store).packets[0],
+    readings = packetReadings(second);
+  assert.equal(packetKind(second), 'Luftfuktighet');
+  const carried = readings.find((r) => r.metric === 'temperatureC');
+  assert.equal(carried.source, 'retained');
+  assert.equal(carried.at, first.observedAt);
+  assert.equal(carried.value, temperature.value);
+  const rh = readings.find((r) => r.metric === 'humidityPct');
+  assert.equal(rh.source, 'packet');
+  assert.equal(rh.value, 57.5);
+  assert.equal(readingValue(rh), '57,5 %');
+  assert.equal(readings.find((r) => r.metric === 'windMeanMs').source, 'calculated');
+  assert.equal(readings.find((r) => r.metric === 'beaufort').source, 'calculated');
+  assert.equal(readingValue({ metric: 'windDirectionDeg', value: 270 }), 'V (270°)');
+});
+
+test('interpreted packet readings preserve missing sensors, zero rain counts and LOOP measurements', () => {
+  const packet = {
+    status: 'accepted',
+    protocol: 'davis-iss',
+    type: 14,
+    rainCounterTips: 0,
+    freshFields: ['windSpeedMs', 'windDirectionDeg'],
+    measurements: { windSpeedMs: 0, windDirectionDeg: null },
+    derived: { beaufort: 0 },
+  };
+  const readings = packetReadings(packet);
+  assert.equal(readingValue(readings.find((r) => r.metric === 'windSpeedMs')), '0 m/s');
+  assert.equal(readingValue(readings.find((r) => r.metric === 'windDirectionDeg')), 'Mangler');
+  assert.equal(readingValue(readings.find((r) => r.metric === 'rainCounterTips')), '0 vipp');
+  assert.equal(packetKind(packet), 'Regnteller');
+  assert.equal(
+    packetReadings({ ...packet, protocol: 'davis-loop', freshFields: null }).find(
+      (r) => r.metric === 'windSpeedMs',
+    ).source,
+    'packet',
+  );
 });
